@@ -70,12 +70,12 @@ class TaskProcessor:
         # Simple reporting format — only what matters
         rows = [
             {
-                "task":     task.get("task", ""),
-                "assignee": task.get("assignee", ""),
-                "status":   task.get("status", "open"),
-                "priority": task.get("priority", "medium"),
-                "deadline": task.get("deadline", ""),
-                "date":     task.get("message_timestamp", ""),
+                "task":       task.get("task", ""),
+                "assignee":   task.get("assignee", ""),
+                "status":     task.get("status", "open"),
+                "priority":   task.get("priority", "medium"),
+                "deadline":   task.get("deadline", ""),
+                "date":       task.get("created_at", ""),
             }
             for task in tasks
         ]

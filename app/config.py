@@ -59,11 +59,14 @@ class Settings:
         return result
 
     def resolve_sender_name(self, raw_name: str) -> str:
-        """Return mapped real name if phone number found in raw_name, else return raw_name."""
+        """Return mapped real name if phone number or exact key found in raw_name, else return raw_name."""
         if not self.sender_name_map:
             return raw_name
-        # raw_name may contain phone like "+92 304 4233803 Chaudhry Safian"
-        # strip spaces and + for matching
+        # Check exact match first (e.g. AT=Ayan)
+        stripped = raw_name.strip()
+        if stripped in self.sender_name_map:
+            return self.sender_name_map[stripped]
+        # Match phone digits embedded in raw_name
         digits_only = "".join(c for c in raw_name if c.isdigit())
         for key, real_name in self.sender_name_map.items():
             key_digits = "".join(c for c in key if c.isdigit())
