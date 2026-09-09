@@ -1,0 +1,34 @@
+# Environment & secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Data & output (generated at runtime)
+data/tasks.db
+data/tasks.xlsx
+data/.~lock.*
+
+# Logs & screenshots (runtime artifacts)
+logs/
+screenshots/
+
+# Browser profile (contains session/auth data)
+.config/
+
+# IDE
+.vscode/
+.idea/
+
+# Pytest
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
