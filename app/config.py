@@ -16,6 +16,10 @@ class Settings:
         self.llm_model = os.getenv("LLM_MODEL", os.getenv("MISTRAL_MODEL", "mistral-small-latest"))
         self.mistral_api_key = os.getenv("MISTRAL_API_KEY", "")
         self.mistral_model = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+        # NVIDIA NIM (OpenAI-compatible) — preferred over Mistral if key is set
+        self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
+        self.nvidia_base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+        self.nvidia_model = os.getenv("NVIDIA_MODEL", "mistralai/mistral-small-3.1-24b-instruct")
         self.target_window_days = int(os.getenv("TARGET_WINDOW_DAYS", "7"))
         self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
         self.excel_output_path = os.getenv("EXCEL_OUTPUT_PATH", "./data/tasks.xlsx")

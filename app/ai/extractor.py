@@ -20,22 +20,31 @@ class LLMTaskExtractor:
 
     def __init__(self, config=None) -> None:
         self.cfg = config or settings()
-        self._mistral = None
+        self._client = None
 
-        if self.cfg.mistral_api_key:
+        if self.cfg.nvidia_api_key:
+            try:
+                from app.ai.mistral_client import NvidiaBatchExtractor
+                self._client = NvidiaBatchExtractor(self.cfg)
+                logger.info("Using NVIDIA NIM for task extraction (model: %s)", self.cfg.nvidia_model)
+            except Exception as e:
+                logger.warning("Could not initialize NVIDIA NIM client: %s", e)
+
+        if self._client is None and self.cfg.mistral_api_key:
             try:
                 from app.ai.mistral_client import MistralBatchExtractor
-                self._mistral = MistralBatchExtractor(self.cfg)
-                logger.info("Using Mistral LLM for batch task extraction (model: %s)", self.cfg.mistral_model)
+                self._client = MistralBatchExtractor(self.cfg)
+                logger.info("Using Mistral for task extraction (model: %s)", self.cfg.mistral_model)
             except Exception as e:
-                logger.warning("Could not initialize Mistral client: %s — falling back to rules", e)
-        else:
-            logger.warning("MISTRAL_API_KEY not set — using rule-based fallback extractor")
+                logger.warning("Could not initialize Mistral client: %s", e)
+
+        if self._client is None:
+            logger.warning("No LLM API key configured — using rule-based fallback extractor")
 
     def extract_batch(self, messages: list[dict[str, Any]]) -> list[TaskExtraction]:
         """Process all messages at once and return extracted tasks."""
-        if self._mistral:
-            return self._mistral.extract_all(messages)
+        if self._client:
+            return self._client.extract_all(messages)
         return _RuleBasedExtractor().extract_batch(messages)
 
     def extract(self, message: dict[str, Any]) -> TaskExtraction | None:

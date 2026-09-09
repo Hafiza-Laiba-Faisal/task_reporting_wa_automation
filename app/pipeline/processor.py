@@ -67,23 +67,15 @@ class TaskProcessor:
         if self.dry_run:
             logger.info("Dry run enabled; no Excel update performed.")
             return
+        # Simple reporting format — only what matters
         rows = [
             {
-                "task_id": task.get("task_key"),
-                "date": task.get("message_timestamp"),
-                "task": task.get("task"),
-                "assignee": task.get("assignee"),
-                "deadline": task.get("deadline"),
-                "priority": task.get("priority"),
-                "status": task.get("status"),
-                "source_group": task.get("source_group"),
-                "source_sender": task.get("source_sender"),
-                "source_message": task.get("source_message"),
-                "message_timestamp": task.get("message_timestamp"),
-                "confidence": task.get("confidence"),
-                "created_at": task.get("created_at"),
-                "updated_at": task.get("updated_at"),
-                "review_required": task.get("review_required", False),
+                "task":     task.get("task", ""),
+                "assignee": task.get("assignee", ""),
+                "status":   task.get("status", "open"),
+                "priority": task.get("priority", "medium"),
+                "deadline": task.get("deadline", ""),
+                "date":     task.get("message_timestamp", ""),
             }
             for task in tasks
         ]
