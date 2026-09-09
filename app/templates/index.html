@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WhatsApp Task Automation</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>WhatsApp Task Automation</h1>
+
+      <!-- Config -->
+      <div class="card">
+        <form id="configForm">
+          <label>Target group name</label>
+          <input id="groupName" name="whatsapp_group_name" placeholder="ABC Company - Operations" required />
+
+          <label>Dry run</label>
+          <select id="dryRun" name="dry_run">
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+
+          <label>Mistral API key</label>
+          <input id="mistralKey" name="llm_api_key" type="password" placeholder="Optional if already in .env" />
+
+          <label>Mistral model</label>
+          <input id="modelName" name="llm_model" value="mistral-small-latest" />
+
+          <button type="submit">Save Config</button>
+        </form>
+      </div>
+
+      <!-- Actions -->
+      <div class="card actions">
+        <button id="runBtn">▶ Run Task Extraction</button>
+        <button id="reprocessBtn" class="btn-secondary">↻ Reprocess from DB</button>
+      </div>
+
+      <!-- Status -->
+      <div class="card output" id="statusBox">Ready.</div>
+
+      <!-- DB Viewer Tabs -->
+      <div class="card">
+        <div class="tab-bar">
+          <button class="tab-btn active" data-tab="tasks">Tasks DB</button>
+          <button class="tab-btn" data-tab="messages">Messages DB</button>
+        </div>
+
+        <!-- Tasks table -->
+        <div id="tab-tasks" class="tab-content">
+          <div class="table-toolbar">
+            <button id="refreshTasksBtn" class="btn-small">Refresh</button>
+            <span id="tasksCount" class="count-badge"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="tasksTable">
+              <thead>
+                <tr>
+                  <th>Assignee</th>
+                  <th>Task</th>
+                  <th>Status</th>
+                  <th>Priority</th>
+                  <th>Deadline</th>
+                  <th>Sender</th>
+                  <th>Time</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody id="tasksBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Messages table -->
+        <div id="tab-messages" class="tab-content" style="display:none">
+          <div class="table-toolbar">
+            <button id="refreshMsgsBtn" class="btn-small">Refresh</button>
+            <span id="msgsCount" class="count-badge"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="msgsTable">
+              <thead>
+                <tr>
+                  <th>Sender</th>
+                  <th>Message</th>
+                  <th>Time</th>
+                  <th>Collected At</th>
+                </tr>
+              </thead>
+              <tbody id="msgsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
