@@ -281,10 +281,80 @@ task_reporting_wa_automation/
 
 ---
 
-## 9. FUTURE IMPROVEMENTS
+## 9. LLM PROVIDER CONFIGURATION
 
-- Auto-scroll to load older messages for historical runs
-- Multi-group support
-- Task status sync with project trackers (Jira, Linear, Notion)
-- WhatsApp Business API migration when available
-- Scheduled runs via cron/systemd
+### 9.1 Available Providers
+
+**NVIDIA NIM (Recommended — Production)**
+- Most stable and reliable for production use
+- No rate limits on free tier
+- OpenAI-compatible API interface
+- Configuration:
+  ```env
+  LLM_PROVIDER=nvidia
+  NVIDIA_API_KEY=nvapi-...
+  NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+  NVIDIA_MODEL=mistralai/mistral-large-2-instruct
+  ```
+
+**Mistral (Fallback)**
+- Free tier with rate limits (~2 req/min)
+- Reliable for batch extraction when rate limits permit
+- Configuration:
+  ```env
+  LLM_PROVIDER=mistral
+  MISTRAL_API_KEY=...
+  MISTRAL_MODEL=mistral-small-latest
+  ```
+
+**OpenAI**
+- High-quality extraction but requires paid API
+- Configuration:
+  ```env
+  LLM_PROVIDER=openai
+  OPENAI_API_KEY=sk-...
+  OPENAI_MODEL=gpt-4o-mini
+  ```
+
+**Ollama (Local, Offline)**
+- Future support planned
+- Runs LLM locally on laptop/server
+- Zero API costs, privacy-focused
+- Configuration (planned):
+  ```env
+  LLM_PROVIDER=ollama
+  OLLAMA_BASE_URL=http://localhost:11434
+  OLLAMA_MODEL=mistral
+  ```
+
+### 9.2 Provider Selection Logic
+
+In `app/ai/extractor.py`:
+1. Check `LLM_PROVIDER` env variable (default: `nvidia`)
+2. Attempt to initialize chosen provider
+3. If initialization fails, try auto-fallback chain: nvidia → mistral → rule-based
+4. Log which provider is active
+
+In `mistral_client.py`:
+- `NvidiaBatchExtractor` — uses OpenAI SDK for NVIDIA NIM (also works for OpenAI)
+- `MistralBatchExtractor` — uses Mistral SDK directly
+- Both implement `.extract_all(messages)` → `list[TaskExtraction]`
+
+### 9.3 Runtime Prompt Override
+
+If `CUSTOM_SYSTEM_PROMPT` is set in `.env`, it replaces the default task extraction prompt:
+```env
+CUSTOM_SYSTEM_PROMPT=Extract only backend tasks, ignore frontend or design work.
+```
+
+---
+
+## 10. FUTURE IMPROVEMENTS
+
+- **Ollama support** — Add local LLM provider for offline extraction
+- **Frontend settings page** — Web UI to change LLM_PROVIDER and CUSTOM_SYSTEM_PROMPT at runtime
+- **Scheduled runs** — Cron/systemd timer for daily 8 PM execution
+- **Rate limit retry** — Exponential backoff for Mistral
+- **Multi-group support** — Handle multiple WhatsApp groups in single run
+- **Task status sync** — Project tracker integration (Jira, Linear, Notion)
+- **WhatsApp Business API** — Migration when available
