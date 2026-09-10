@@ -13,6 +13,14 @@ from app.logger import get_logger
 logger = get_logger("mistral_client")
 
 
+def _get_system_prompt(cfg) -> str:
+    """Return custom prompt from config if set, else default."""
+    if cfg.custom_system_prompt:
+        logger.info("Using custom system prompt from config.")
+        return cfg.custom_system_prompt
+    return TASK_EXTRACTION_SYSTEM_PROMPT
+
+
 class RateLimitError(Exception):
     """Raised when API returns 429 rate limit."""
     pass
