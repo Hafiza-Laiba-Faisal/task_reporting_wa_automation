@@ -50,6 +50,14 @@ def _parse_response(raw: str) -> list[dict]:
     return parsed
 
 
+def _get_system_prompt(cfg) -> str:
+    """Return custom prompt from config if set, else default."""
+    if cfg.custom_system_prompt:
+        logger.info("Using custom system prompt from config.")
+        return cfg.custom_system_prompt
+    return TASK_EXTRACTION_SYSTEM_PROMPT
+
+
 def _to_task_extractions(payload_list: list[dict], message_count: int, source: str) -> list[TaskExtraction]:
     allowed_priorities = {"low", "medium", "high", "urgent"}
     allowed_statuses = {"open", "in_progress", "completed", "blocked", "review"}
@@ -169,3 +177,66 @@ class MistralBatchExtractor:
             return []
 
         return _to_task_extractions(payload_list, len(messages), "Mistral")
+
+
+# ── Ollama (Local, Offline) ───────────────────────────────────────────────────
+
+class OllamaBatchExtractor:
+    """
+    Local LLM extraction via Ollama.
+    Zero API costs, fully offline, privacy-focused.
+    Requires Ollama running locally (e.g., http://localhost:11434).
+    Uses the official ollama Python SDK.
+    """
+
+    def __init__(self, config=None) -> None:
+        self.cfg = config or settings()
+        self.model = self.cfg.ollama_model
+        self._check_health()
+
+    def _check_health(self) -> None:
+        """Verify Ollama is running and model is available."""
+        import ollama
+        try:
+            client = ollama.Client(host=self.cfg.ollama_base_url)
+            models_resp = client.list()
+            model_names = [m.model.split(":")[0] if ":" in (m.model or "") else (m.model or "")
+                           for m in models_resp.models]
+            full_names = [m.model for m in models_resp.models]
+            all_names = set(model_names + full_names)
+            if self.model not in all_names and self.model.split(":")[0] not in model_names:
+                logger.warning(
+                    "Model '%s' not found in Ollama. Available: %s",
+                    self.model, list(all_names)
+                )
+        except Exception as e:
+            raise RuntimeError(f"Cannot connect to Ollama at {self.cfg.ollama_base_url}: {e}") from e
+
+    def extract_all(self, messages: list[dict[str, Any]]) -> list[TaskExtraction]:
+        if not messages:
+            return []
+
+        import ollama
+        conversation_text = _build_conversation_text(messages)
+        logger.info("Sending %d messages to Ollama (%s) for batch extraction.",
+                    len(messages), self.model)
+        logger.debug("Conversation:\n%s", conversation_text)
+
+        try:
+            client = ollama.Client(host=self.cfg.ollama_base_url)
+            response = client.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": _get_system_prompt(self.cfg)},
+                    {"role": "user", "content": f"Extract tasks from these WhatsApp messages:\n\n{conversation_text}"},
+                ],
+                options={"temperature": 0.1},
+            )
+            raw = response.message.content
+            logger.debug("Ollama raw response:\n%s", raw)
+            payload_list = _parse_response(raw)
+        except Exception as e:
+            logger.error("Ollama batch call failed: %s", e)
+            return []
+
+        return _to_task_extractions(payload_list, len(messages), "Ollama")

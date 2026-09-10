@@ -22,9 +22,18 @@ class LLMTaskExtractor:
         self.cfg = config or settings()
         self._client = None
 
-        provider = self.cfg.llm_provider  # nvidia | mistral | openai
+        provider = self.cfg.llm_provider  # nvidia | mistral | openai | ollama
 
-        if provider == "nvidia" and self.cfg.nvidia_api_key:
+        if provider == "ollama":
+            try:
+                from app.ai.mistral_client import OllamaBatchExtractor
+                self._client = OllamaBatchExtractor(self.cfg)
+                logger.info("Using Ollama (model: %s, base_url: %s)", 
+                           self.cfg.ollama_model, self.cfg.ollama_base_url)
+            except Exception as e:
+                logger.warning("Ollama init failed: %s", e)
+
+        elif provider == "nvidia" and self.cfg.nvidia_api_key:
             try:
                 from app.ai.mistral_client import NvidiaBatchExtractor
                 self._client = NvidiaBatchExtractor(self.cfg)
@@ -54,6 +63,7 @@ class LLMTaskExtractor:
             for fallback_provider, init_fn in [
                 ("nvidia",  self._try_nvidia),
                 ("mistral", self._try_mistral),
+                ("ollama",  self._try_ollama),
             ]:
                 if fallback_provider != provider:
                     client = init_fn()
@@ -63,6 +73,16 @@ class LLMTaskExtractor:
 
         if self._client is None:
             logger.warning("No LLM configured — using rule-based fallback")
+
+    def _try_ollama(self):
+        try:
+            from app.ai.mistral_client import OllamaBatchExtractor
+            c = OllamaBatchExtractor(self.cfg)
+            logger.info("Fallback: using Ollama")
+            return c
+        except Exception:
+            pass
+        return None
 
     def _try_nvidia(self):
         if self.cfg.nvidia_api_key:

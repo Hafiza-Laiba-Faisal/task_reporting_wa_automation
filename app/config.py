@@ -23,7 +23,10 @@ class Settings:
         # OpenAI
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
         self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        # LLM provider selection: nvidia | mistral | openai
+        # Ollama (local/offline)
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "mistral")
+        # LLM provider selection: nvidia | mistral | openai | ollama
         self.llm_provider = os.getenv("LLM_PROVIDER", "nvidia").lower()
         # Custom system prompt override — if set, replaces default prompt
         self.custom_system_prompt = os.getenv("CUSTOM_SYSTEM_PROMPT", "").strip()
