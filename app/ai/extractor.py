@@ -22,24 +22,69 @@ class LLMTaskExtractor:
         self.cfg = config or settings()
         self._client = None
 
-        if self.cfg.nvidia_api_key:
+        provider = self.cfg.llm_provider  # nvidia | mistral | openai
+
+        if provider == "nvidia" and self.cfg.nvidia_api_key:
             try:
                 from app.ai.mistral_client import NvidiaBatchExtractor
                 self._client = NvidiaBatchExtractor(self.cfg)
-                logger.info("Using NVIDIA NIM for task extraction (model: %s)", self.cfg.nvidia_model)
+                logger.info("Using NVIDIA NIM (model: %s)", self.cfg.nvidia_model)
             except Exception as e:
-                logger.warning("Could not initialize NVIDIA NIM client: %s", e)
+                logger.warning("NVIDIA init failed: %s", e)
 
-        if self._client is None and self.cfg.mistral_api_key:
+        elif provider == "openai" and self.cfg.openai_api_key:
+            try:
+                from app.ai.mistral_client import NvidiaBatchExtractor
+                # OpenAI uses same interface — just different base_url (None = default)
+                self._client = NvidiaBatchExtractor(self.cfg)
+                logger.info("Using OpenAI (model: %s)", self.cfg.openai_model)
+            except Exception as e:
+                logger.warning("OpenAI init failed: %s", e)
+
+        elif provider == "mistral" and self.cfg.mistral_api_key:
             try:
                 from app.ai.mistral_client import MistralBatchExtractor
                 self._client = MistralBatchExtractor(self.cfg)
-                logger.info("Using Mistral for task extraction (model: %s)", self.cfg.mistral_model)
+                logger.info("Using Mistral (model: %s)", self.cfg.mistral_model)
             except Exception as e:
-                logger.warning("Could not initialize Mistral client: %s", e)
+                logger.warning("Mistral init failed: %s", e)
+
+        # Auto-fallback chain if preferred provider failed
+        if self._client is None:
+            for fallback_provider, init_fn in [
+                ("nvidia",  self._try_nvidia),
+                ("mistral", self._try_mistral),
+            ]:
+                if fallback_provider != provider:
+                    client = init_fn()
+                    if client:
+                        self._client = client
+                        break
 
         if self._client is None:
-            logger.warning("No LLM API key configured — using rule-based fallback extractor")
+            logger.warning("No LLM configured — using rule-based fallback")
+
+    def _try_nvidia(self):
+        if self.cfg.nvidia_api_key:
+            try:
+                from app.ai.mistral_client import NvidiaBatchExtractor
+                c = NvidiaBatchExtractor(self.cfg)
+                logger.info("Fallback: using NVIDIA NIM")
+                return c
+            except Exception:
+                pass
+        return None
+
+    def _try_mistral(self):
+        if self.cfg.mistral_api_key:
+            try:
+                from app.ai.mistral_client import MistralBatchExtractor
+                c = MistralBatchExtractor(self.cfg)
+                logger.info("Fallback: using Mistral")
+                return c
+            except Exception:
+                pass
+        return None
 
     def extract_batch(self, messages: list[dict[str, Any]]) -> list[TaskExtraction]:
         """Process all messages at once and return extracted tasks."""
