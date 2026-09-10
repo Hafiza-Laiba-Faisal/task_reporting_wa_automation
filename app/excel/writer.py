@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -12,26 +13,14 @@ from app.logger import get_logger
 logger = get_logger("excel_writer")
 
 # ── Colours ───────────────────────────────────────────────────────────────────
-_HDR_BG   = "1F3864"
-_HDR_FG   = "FFFFFF"
-_COL_BG   = "2E75B6"
-_COL_FG   = "FFFFFF"
-_ROW_A    = "EBF3FB"
-_ROW_B    = "FFFFFF"
-
-_STATUS_CLR = {
-    "completed":   ("C6EFCE", "375623"),
-    "in_progress": ("FFEB9C", "9C5700"),
-    "open":        ("DDEBF7", "1F3864"),
-    "blocked":     ("FFC7CE", "9C0006"),
-    "review":      ("E2EFDA", "375623"),
-}
-_PRIORITY_CLR = {
-    "urgent": ("FF0000", "FFFFFF"),
-    "high":   ("FF9900", "FFFFFF"),
-    "medium": ("4472C4", "FFFFFF"),
-    "low":    ("70AD47", "FFFFFF"),
-}
+_HDR_BG = "1F3864"   # dark navy — title row
+_HDR_FG = "FFFFFF"
+_EMP_BG = "2E75B6"   # blue — employee header row
+_EMP_FG = "FFFFFF"
+_DATE_BG = "1F3864"  # dark navy — date column
+_DATE_FG = "FFFFFF"
+_ROW_A   = "EBF3FB"  # light blue alternating row
+_ROW_B   = "FFFFFF"
 
 _THIN   = Side(style="thin", color="B0BEC5")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
@@ -45,59 +34,52 @@ def _font(bold=False, color="000000", size=10) -> Font:
     return Font(bold=bold, color=color, size=size, name="Calibri")
 
 
+def _normalize_day(raw_date: str) -> str:
+    """Return YYYY-MM-DD from any reasonable date string."""
+    raw = str(raw_date).strip()
+    if " " in raw:
+        raw = raw.split(" ")[0]
+    if "T" in raw:
+        raw = raw.split("T")[0]
+    day = raw[:10]
+    parts = day.split("-")
+    # DD-MM-YYYY → YYYY-MM-DD
+    if len(parts) == 3 and len(parts[0]) == 2 and len(parts[2]) == 4:
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return day
+
+
+def _day_label(iso: str) -> str:
+    """YYYY-MM-DD → '08 Sep 2026'"""
+    try:
+        return date.fromisoformat(iso).strftime("%d %b %Y")
+    except Exception:
+        return iso
+
+
 class ExcelWriter:
     def __init__(self, file_path: str) -> None:
         self.file_path = Path(file_path).expanduser()
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # ── Public entry point ────────────────────────────────────────────────────
     def write_tasks(self, rows: list[dict]) -> None:
         if not rows:
             logger.info("No task rows to write to Excel.")
             return
 
-        # Group by date → then by assignee, merging all tasks into one cell
-        from collections import defaultdict
-        by_date: dict[str, dict[str, dict]] = defaultdict(dict)
+        # Structure: { "YYYY-MM-DD": { "Employee": ["task1", "task2", ...] } }
+        data: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
 
         for r in rows:
-            raw_date = str(r.get("date") or r.get("created_at") or date.today().isoformat())
-            # Extract just date part — ignore time portion
-            raw_date = raw_date.strip()
-            if " " in raw_date:
-                raw_date = raw_date.split(" ")[0]
-            if "T" in raw_date:
-                raw_date = raw_date.split("T")[0]
-            day = raw_date[:10]
-            # Handle DD-MM-YYYY format → convert to YYYY-MM-DD
-            parts = day.split("-")
-            if len(parts) == 3 and len(parts[0]) == 2 and len(parts[2]) == 4:
-                day = f"{parts[2]}-{parts[1]}-{parts[0]}"
-
+            day      = _normalize_day(r.get("date") or r.get("created_at") or date.today().isoformat())
             assignee = str(r.get("assignee") or "Unknown").strip()
-            task_text = str(r.get("task") or "").strip()
-            status = str(r.get("status") or "open").lower()
-            priority = str(r.get("priority") or "medium").lower()
-            deadline = str(r.get("deadline") or "")
+            task     = str(r.get("task") or "").strip()
 
-            if assignee not in by_date[day]:
-                by_date[day][assignee] = {
-                    "tasks": [],
-                    "status": status,
-                    "priority": priority,
-                    "deadline": deadline,
-                }
-
-            # Append each task as a bullet
-            for line in task_text.splitlines():
+            for line in task.splitlines():
                 line = line.strip().lstrip("•").strip()
                 if line:
-                    by_date[day][assignee]["tasks"].append(line)
-
-            # Take "highest" status across tasks
-            order = ["completed", "in_progress", "review", "open", "blocked"]
-            cur_s = by_date[day][assignee]["status"]
-            if order.index(status) < order.index(cur_s) if status in order and cur_s in order else False:
-                by_date[day][assignee]["status"] = status
+                    data[day][assignee].append(line)
 
         target = self.file_path
         temp   = target.with_suffix(".tmp.xlsx")
@@ -106,110 +88,90 @@ class ExcelWriter:
         if "Sheet" in wb.sheetnames:
             del wb["Sheet"]
 
-        for day_str in sorted(by_date.keys()):
-            try:
-                sheet_name = date.fromisoformat(day_str).strftime("%d %b %Y")
-            except Exception:
-                # Try DD-MM-YYYY format
-                try:
-                    parts = day_str[:10].split("-")
-                    if len(parts) == 3 and len(parts[0]) == 2:
-                        iso = f"{parts[2]}-{parts[1]}-{parts[0]}"
-                        sheet_name = date.fromisoformat(iso).strftime("%d %b %Y")
-                    else:
-                        sheet_name = day_str[:10]
-                except Exception:
-                    sheet_name = day_str[:10]
+        # Remove old summary sheet so we rebuild it fresh
+        if "Task Summary" in wb.sheetnames:
+            del wb["Task Summary"]
 
-            if sheet_name in wb.sheetnames:
-                del wb[sheet_name]
+        ws = wb.create_sheet(title="Task Summary", index=0)
+        self._write_summary_sheet(ws, data)
 
-            ws = wb.create_sheet(title=sheet_name)
-            self._write_sheet(ws, sheet_name, by_date[day_str])
-
-        if wb.sheetnames:
-            wb.active = wb[wb.sheetnames[-1]]
+        wb.active = wb["Task Summary"]
 
         wb.save(temp)
         temp.replace(target)
-        logger.info("Excel workbook updated successfully: %s", target)
+        logger.info("Excel workbook updated: %s", target)
 
-    def _write_sheet(self, ws, date_label: str, by_person: dict) -> None:
-        # Column widths: Name | Tasks | Status | Priority | Deadline
-        for col, w in [(1, 22), (2, 70), (3, 14), (4, 12), (5, 14)]:
-            ws.column_dimensions[get_column_letter(col)].width = w
+    # ── Sheet builder ─────────────────────────────────────────────────────────
+    def _write_summary_sheet(
+        self,
+        ws,
+        data: dict[str, dict[str, list[str]]],
+    ) -> None:
+        """
+        Layout:
+          Row 1  : Title (merged across all columns)
+          Row 2  : "Date" | Employee1 | Employee2 | ...
+          Row 3+ : <date label> | tasks for emp1 | tasks for emp2 | ...
+        """
+        # Sorted dates and employees
+        sorted_dates     = sorted(data.keys())
+        all_employees    = sorted({emp for day in data.values() for emp in day})
+        n_emp            = len(all_employees)
+        total_cols       = 1 + n_emp           # date col + one per employee
 
-        # Title row
-        ws.merge_cells("A1:E1")
-        c = ws["A1"]
-        c.value = f"Daily Task Report — {date_label}"
-        c.fill  = _fill(_HDR_BG)
-        c.font  = _font(bold=True, color=_HDR_FG, size=13)
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        ws.row_dimensions[1].height = 28
+        # ── Row 1: Title ──────────────────────────────────────────────────────
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+        title_cell = ws.cell(row=1, column=1, value="TenBit Daily Task Report")
+        title_cell.fill      = _fill(_HDR_BG)
+        title_cell.font      = _font(bold=True, color=_HDR_FG, size=14)
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 30
 
-        # Column headers
-        for col, hdr in enumerate(["Team Member", "Tasks", "Status", "Priority", "Deadline"], 1):
-            c = ws.cell(row=2, column=col, value=hdr)
-            c.fill = _fill(_COL_BG)
-            c.font = _font(bold=True, color=_COL_FG, size=10)
-            c.alignment = Alignment(horizontal="center", vertical="center")
-            c.border = _BORDER
-        ws.row_dimensions[2].height = 18
+        # ── Row 2: Headers (Date + employees) ────────────────────────────────
+        date_hdr = ws.cell(row=2, column=1, value="Date")
+        date_hdr.fill      = _fill(_DATE_BG)
+        date_hdr.font      = _font(bold=True, color=_DATE_FG, size=10)
+        date_hdr.alignment = Alignment(horizontal="center", vertical="center")
+        date_hdr.border    = _BORDER
 
-        row = 3
-        for i, person in enumerate(sorted(by_person.keys())):
-            data   = by_person[person]
-            tasks  = data["tasks"]
-            status = data["status"]
-            priority = data["priority"]
-            deadline = data["deadline"]
-            bg = _ROW_A if i % 2 == 0 else _ROW_B
+        for col_idx, emp in enumerate(all_employees, start=2):
+            c = ws.cell(row=2, column=col_idx, value=emp)
+            c.fill      = _fill(_EMP_BG)
+            c.font      = _font(bold=True, color=_EMP_FG, size=10)
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border    = _BORDER
 
-            # Build task text — bullet points
-            task_cell_value = "\n".join(f"• {t}" for t in tasks) if tasks else ""
+        ws.row_dimensions[2].height = 20
 
-            # Estimate row height based on number of lines
-            n_lines = max(len(tasks), 1)
-            ws.row_dimensions[row].height = max(18, min(n_lines * 15, 200))
+        # ── Date column width & employee column width ─────────────────────────
+        ws.column_dimensions["A"].width = 14
+        for col_idx in range(2, total_cols + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 28
 
-            # A: Team Member
-            c = ws.cell(row=row, column=1, value=person)
-            c.fill = _fill(bg)
-            c.font = _font(bold=True, size=10)
-            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=False)
-            c.border = _BORDER
+        # ── Data rows ─────────────────────────────────────────────────────────
+        for row_idx, day in enumerate(sorted_dates, start=3):
+            bg = _ROW_A if row_idx % 2 == 0 else _ROW_B
 
-            # B: Tasks
-            c = ws.cell(row=row, column=2, value=task_cell_value)
-            c.fill = _fill(bg)
-            c.font = _font(size=10)
-            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-            c.border = _BORDER
-
-            # C: Status badge
-            s_bg, s_fg = _STATUS_CLR.get(status, ("E0E0E0", "333333"))
-            c = ws.cell(row=row, column=3, value=status.replace("_", " ").title())
-            c.fill = _fill(s_bg)
-            c.font = _font(bold=True, color=s_fg, size=9)
+            # Date cell
+            c = ws.cell(row=row_idx, column=1, value=_day_label(day))
+            c.fill      = _fill(_DATE_BG)
+            c.font      = _font(bold=True, color=_DATE_FG, size=10)
             c.alignment = Alignment(horizontal="center", vertical="top")
-            c.border = _BORDER
+            c.border    = _BORDER
 
-            # D: Priority badge
-            p_bg, p_fg = _PRIORITY_CLR.get(priority, ("E0E0E0", "333333"))
-            c = ws.cell(row=row, column=4, value=priority.title())
-            c.fill = _fill(p_bg)
-            c.font = _font(bold=True, color=p_fg, size=9)
-            c.alignment = Alignment(horizontal="center", vertical="top")
-            c.border = _BORDER
+            max_lines = 1
+            for col_idx, emp in enumerate(all_employees, start=2):
+                tasks = data[day].get(emp, [])
+                cell_text = "\n".join(f"• {t}" for t in tasks) if tasks else ""
+                max_lines = max(max_lines, len(tasks))
 
-            # E: Deadline
-            c = ws.cell(row=row, column=5, value=deadline)
-            c.fill = _fill(bg)
-            c.font = _font(size=10)
-            c.alignment = Alignment(horizontal="center", vertical="top")
-            c.border = _BORDER
+                c = ws.cell(row=row_idx, column=col_idx, value=cell_text)
+                c.fill      = _fill(bg)
+                c.font      = _font(size=10)
+                c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                c.border    = _BORDER
 
-            row += 1
+            # Row height based on busiest employee that day
+            ws.row_dimensions[row_idx].height = max(18, min(max_lines * 16, 250))
 
-        ws.freeze_panes = "A3"
+        ws.freeze_panes = "B3"   # freeze date column + header rows
