@@ -19,7 +19,14 @@ class Settings:
         # NVIDIA NIM (OpenAI-compatible) — preferred over Mistral if key is set
         self.nvidia_api_key = os.getenv("NVIDIA_API_KEY", "")
         self.nvidia_base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-        self.nvidia_model = os.getenv("NVIDIA_MODEL", "mistralai/mistral-small-3.1-24b-instruct")
+        self.nvidia_model = os.getenv("NVIDIA_MODEL", "mistralai/mistral-large-2-instruct")
+        # OpenAI
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self.openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        # LLM provider selection: nvidia | mistral | openai
+        self.llm_provider = os.getenv("LLM_PROVIDER", "nvidia").lower()
+        # Custom system prompt override — if set, replaces default prompt
+        self.custom_system_prompt = os.getenv("CUSTOM_SYSTEM_PROMPT", "").strip()
         self.target_window_days = int(os.getenv("TARGET_WINDOW_DAYS", "7"))
         self.dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
         self.excel_output_path = os.getenv("EXCEL_OUTPUT_PATH", "./data/tasks.xlsx")
