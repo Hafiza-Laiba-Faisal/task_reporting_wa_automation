@@ -26,6 +26,83 @@ class RateLimitError(Exception):
     pass
 
 
+# ── OpenRouter (free models — OpenAI-compatible) ──────────────────────────────
+
+class OpenRouterBatchExtractor:
+    """
+    Uses OpenRouter API (OpenAI-compatible) for batch task extraction.
+    Supports free models: nvidia/nemotron-3-super-120b-a12b:free, etc.
+    Fallback chain: tries configured model, falls back to next free model.
+    """
+
+    FALLBACK_MODELS = [
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "google/gemma-4-31b-it:free",
+    ]
+
+    def __init__(self, config=None) -> None:
+        self.cfg = config or settings()
+        from openai import OpenAI
+        self.client = OpenAI(
+            api_key=self.cfg.openrouter_api_key,
+            base_url=self.cfg.openrouter_base_url,
+        )
+        self.model = self.cfg.openrouter_model
+
+    def extract_all(self, messages: list[dict[str, Any]]) -> list[TaskExtraction]:
+        if not messages:
+            return []
+
+        # Split into small batches — reasoning models truncate on large inputs
+        BATCH_SIZE = 6
+        all_results: list[TaskExtraction] = []
+        batches = [messages[i:i+BATCH_SIZE] for i in range(0, len(messages), BATCH_SIZE)]
+        logger.info("OpenRouter: %d messages → %d batches of ~%d", len(messages), len(batches), BATCH_SIZE)
+
+        for batch_idx, batch in enumerate(batches):
+            conversation_text = _build_conversation_text(batch)
+            logger.info("Batch %d/%d — %d messages → OpenRouter (%s)",
+                        batch_idx+1, len(batches), len(batch), self.model)
+
+            models_to_try = [self.model] + [m for m in self.FALLBACK_MODELS if m != self.model]
+            batch_results: list[TaskExtraction] = []
+
+            for attempt_model in models_to_try:
+                try:
+                    response = self.client.chat.completions.create(
+                        model=attempt_model,
+                        messages=[
+                            {"role": "system", "content": _get_system_prompt(self.cfg)},
+                            {"role": "user",   "content": f"Extract tasks from these WhatsApp messages:\n\n{conversation_text}"},
+                        ],
+                        temperature=0.1,
+                        max_tokens=16000,
+                    )
+                    raw = response.choices[0].message.content or ""
+                    if attempt_model != self.model:
+                        logger.info("OpenRouter fallback used: %s", attempt_model)
+                    logger.debug("OpenRouter raw response (batch %d):\n%s", batch_idx+1, raw)
+                    payload_list = _parse_response(raw)
+                    batch_results = _to_task_extractions(
+                        payload_list, len(batch), f"OpenRouter/{attempt_model}"
+                    )
+                    break
+                except Exception as e:
+                    err = str(e)
+                    if "429" in err or "rate" in err.lower():
+                        raise RateLimitError(f"OpenRouter rate limit: {e}") from e
+                    logger.warning("OpenRouter model %s failed (batch %d): %s — trying next",
+                                   attempt_model, batch_idx+1, err[:100])
+                    continue
+
+            all_results.extend(batch_results)
+
+        logger.info("OpenRouter total: %d tasks from %d messages.", len(all_results), len(messages))
+        return all_results
+
+
 def _build_conversation_text(messages: list[dict[str, Any]]) -> str:
     today = date.today().strftime("%d %b %Y")
     lines = [f"Date: {today}", ""]

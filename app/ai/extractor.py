@@ -22,9 +22,17 @@ class LLMTaskExtractor:
         self.cfg = config or settings()
         self._client = None
 
-        provider = self.cfg.llm_provider  # nvidia | mistral | openai | ollama
+        provider = self.cfg.llm_provider  # openrouter | nvidia | mistral | openai | ollama
 
-        if provider == "ollama":
+        if provider == "openrouter" and self.cfg.openrouter_api_key:
+            try:
+                from app.ai.mistral_client import OpenRouterBatchExtractor
+                self._client = OpenRouterBatchExtractor(self.cfg)
+                logger.info("Using OpenRouter (model: %s)", self.cfg.openrouter_model)
+            except Exception as e:
+                logger.warning("OpenRouter init failed: %s", e)
+
+        elif provider == "ollama":
             try:
                 from app.ai.mistral_client import OllamaBatchExtractor
                 self._client = OllamaBatchExtractor(self.cfg)
@@ -61,9 +69,10 @@ class LLMTaskExtractor:
         # Auto-fallback chain if preferred provider failed
         if self._client is None:
             for fallback_provider, init_fn in [
-                ("nvidia",  self._try_nvidia),
-                ("mistral", self._try_mistral),
-                ("ollama",  self._try_ollama),
+                ("openrouter", self._try_openrouter),
+                ("nvidia",     self._try_nvidia),
+                ("mistral",    self._try_mistral),
+                ("ollama",     self._try_ollama),
             ]:
                 if fallback_provider != provider:
                     client = init_fn()
@@ -82,6 +91,17 @@ class LLMTaskExtractor:
             return c
         except Exception:
             pass
+        return None
+
+    def _try_openrouter(self):
+        if self.cfg.openrouter_api_key:
+            try:
+                from app.ai.mistral_client import OpenRouterBatchExtractor
+                c = OpenRouterBatchExtractor(self.cfg)
+                logger.info("Fallback: using OpenRouter")
+                return c
+            except Exception:
+                pass
         return None
 
     def _try_nvidia(self):
