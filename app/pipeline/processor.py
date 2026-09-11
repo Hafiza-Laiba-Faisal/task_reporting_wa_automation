@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from app.ai.extractor import LLMTaskExtractor
 from app.config import settings
@@ -12,17 +12,46 @@ from app.logger import get_logger
 logger = get_logger("pipeline")
 
 
+def _today_iso() -> str:
+    return date.today().isoformat()   # YYYY-MM-DD
+
+
+def _resolve_message_date(messages: list[dict]) -> str:
+    """
+    Try to derive the actual message date from collected messages.
+    message_timestamp is typically just a time string ("7:45 PM") — use today's date.
+    If messages have a full ISO timestamp, extract the date from there.
+    Falls back to today.
+    """
+    for m in messages:
+        ts = str(m.get("message_timestamp", ""))
+        # Full ISO or datetime string
+        if len(ts) >= 10 and ts[4] == "-":
+            return ts[:10]
+        processed = str(m.get("processed_at", ""))
+        if len(processed) >= 10:
+            return processed[:10]
+    return _today_iso()
+
+
 class TaskProcessor:
     def __init__(self, messages: list[dict], dry_run: bool | None = None):
         self.messages = messages
         self.cfg = settings()
         self.dry_run = self.cfg.dry_run if dry_run is None else dry_run
         self.extractor = LLMTaskExtractor(self.cfg)
+        # Date the messages belong to (used for task fingerprinting + Excel date column)
+        self.run_date = _resolve_message_date(messages) if messages else _today_iso()
 
     def extract_tasks(self) -> list[dict]:
         """
         Send all messages to LLM in one batch call so it understands
         the full conversation context before extracting tasks.
+
+        Morning messages ("I am working on X") → status = in_progress
+        Evening messages ("X done") → status = completed
+        Both are on the same day → same task_key (date-scoped) → ON CONFLICT upserts,
+        so the evening run updates the morning record's status to completed.
         """
         valid_messages = [
             m for m in self.messages
@@ -33,27 +62,33 @@ class TaskProcessor:
             logger.info("No messages to process.")
             return []
 
-        logger.info("Extracting tasks from %d messages via batch LLM call.", len(valid_messages))
+        logger.info(
+            "Extracting tasks from %d messages via batch LLM call (date: %s).",
+            len(valid_messages), self.run_date
+        )
         extracted = self.extractor.extract_batch(valid_messages)
 
         tasks: list[dict] = []
         for payload in extracted:
-            task_key = task_fingerprint(payload.task, payload.assignee)
+            # Fingerprint is scoped to task + assignee + date
+            # → same task updated in evening will UPSERT (update status) not duplicate
+            task_key = task_fingerprint(payload.task, payload.assignee, self.run_date)
             record = {
-                "task_key": task_key,
-                "task": payload.task,
-                "assignee": payload.assignee,
-                "deadline": payload.deadline,
-                "priority": payload.priority,
-                "status": payload.status,
-                "source_group": self.cfg.whatsapp_group_name,
-                "source_sender": payload.sender,
-                "source_message": payload.source_message,
-                "message_timestamp": payload.message_timestamp,
-                "confidence": payload.confidence,
-                "review_required": payload.confidence < 0.8,
-                "created_at": datetime.utcnow().isoformat(timespec="seconds"),
-                "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "task_key":              task_key,
+                "task":                  payload.task,
+                "assignee":              payload.assignee,
+                "deadline":              payload.deadline,
+                "priority":              payload.priority,
+                "status":                payload.status,
+                "source_group":          self.cfg.whatsapp_group_name,
+                "source_sender":         payload.sender,
+                "source_message":        payload.source_message,
+                "message_timestamp":     payload.message_timestamp,
+                "confidence":            payload.confidence,
+                "review_required":       payload.confidence < 0.8,
+                "date":                  self.run_date,   # ← actual message date for Excel
+                "created_at":            datetime.utcnow().isoformat(timespec="seconds"),
+                "updated_at":            datetime.utcnow().isoformat(timespec="seconds"),
                 "last_processed_run_id": str(uuid.uuid4()),
             }
             tasks.append(record)
@@ -67,21 +102,31 @@ class TaskProcessor:
         if self.dry_run:
             logger.info("Dry run enabled; no Excel update performed.")
             return
-        # Simple reporting format — only what matters
-        rows = [
-            {
-                "task":       task.get("task", ""),
-                "assignee":   task.get("assignee", ""),
-                "status":     task.get("status", "open"),
-                "priority":   task.get("priority", "medium"),
-                "deadline":   task.get("deadline", ""),
-                "date":       task.get("created_at", ""),
-            }
-            for task in tasks
-        ]
+
+        # Pull ALL tasks from DB (not just this run) so Excel always shows full picture
+        from app.database.repository import get_connection
+        conn = get_connection()
+        conn.row_factory = __import__("sqlite3").Row
+        all_tasks = [dict(r) for r in conn.execute(
+            "SELECT task, assignee, status, priority, deadline, created_at FROM tasks ORDER BY created_at"
+        ).fetchall()]
+        conn.close()
+
+        # Prefer 'date' field; fall back to created_at
+        rows = []
+        for t in all_tasks:
+            rows.append({
+                "task":     t.get("task", ""),
+                "assignee": t.get("assignee", ""),
+                "status":   t.get("status", "open"),
+                "priority": t.get("priority", "medium"),
+                "deadline": t.get("deadline", ""),
+                "date":     t.get("date") or t.get("created_at", ""),
+            })
+
         writer = ExcelWriter(self.cfg.excel_output_path)
         writer.write_tasks(rows)
-        logger.info("Excel update complete for %s tasks.", len(rows))
+        logger.info("Excel updated with %d total tasks.", len(rows))
 
     def run(self) -> list[dict]:
         init_db()

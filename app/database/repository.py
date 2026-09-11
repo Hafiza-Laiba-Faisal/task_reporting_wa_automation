@@ -33,6 +33,7 @@ def init_db() -> None:
                 message_text_raw TEXT,
                 message_text_normalized TEXT,
                 message_timestamp TEXT,
+                message_date TEXT,
                 message_fingerprint TEXT UNIQUE,
                 processed_at TEXT,
                 status TEXT,
@@ -53,6 +54,7 @@ def init_db() -> None:
                 message_timestamp TEXT,
                 confidence REAL,
                 review_required INTEGER,
+                date TEXT,
                 created_at TEXT,
                 updated_at TEXT,
                 last_processed_run_id TEXT
@@ -85,14 +87,25 @@ def message_fingerprint(sender: str, message_text: str, timestamp: str, group_na
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def task_fingerprint(task: str, assignee: str | None = None) -> str:
+def task_fingerprint(task: str, assignee: str | None = None, message_date: str | None = None) -> str:
+    """
+    Fingerprint scoped to task + assignee + date.
+    This means the same person doing the same task on different days
+    gets separate records (morning open → evening completed on same day
+    updates via ON CONFLICT; next day is a new record).
+    """
     def clean(value: str | None) -> str:
         if value is None:
             return ""
         normalized = re.sub(r"[^a-z0-9\s]", " ", value.lower())
         return " ".join(normalized.split())
 
-    scope = f"{clean(task)}|{clean(assignee)}"
+    # Use date portion only (YYYY-MM-DD) so same-day upserts work
+    date_part = ""
+    if message_date:
+        date_part = str(message_date).strip()[:10]
+
+    scope = f"{clean(task)}|{clean(assignee)}|{date_part}"
     return hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
 
@@ -103,8 +116,8 @@ def upsert_message(record: dict) -> None:
             """
             INSERT INTO messages (
                 run_id, group_name, sender, message_text_raw, message_text_normalized,
-                message_timestamp, message_fingerprint, processed_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                message_timestamp, message_date, message_fingerprint, processed_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_fingerprint) DO UPDATE SET
                 run_id=excluded.run_id,
                 group_name=excluded.group_name,
@@ -112,6 +125,7 @@ def upsert_message(record: dict) -> None:
                 message_text_raw=excluded.message_text_raw,
                 message_text_normalized=excluded.message_text_normalized,
                 message_timestamp=excluded.message_timestamp,
+                message_date=excluded.message_date,
                 processed_at=excluded.processed_at,
                 status=excluded.status
             """,
@@ -122,6 +136,7 @@ def upsert_message(record: dict) -> None:
                 record.get("message_text_raw"),
                 record.get("message_text_normalized"),
                 record.get("message_timestamp"),
+                record.get("message_date"),
                 record.get("message_fingerprint"),
                 record.get("processed_at"),
                 record.get("status", "processed"),
@@ -140,8 +155,8 @@ def upsert_task(record: dict) -> None:
             INSERT INTO tasks (
                 task_key, task, assignee, deadline, priority, status, source_group,
                 source_sender, source_message, message_timestamp, confidence,
-                review_required, created_at, updated_at, last_processed_run_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                review_required, date, created_at, updated_at, last_processed_run_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_key) DO UPDATE SET
                 task=excluded.task,
                 assignee=excluded.assignee,
@@ -154,6 +169,7 @@ def upsert_task(record: dict) -> None:
                 message_timestamp=excluded.message_timestamp,
                 confidence=excluded.confidence,
                 review_required=excluded.review_required,
+                date=excluded.date,
                 updated_at=excluded.updated_at,
                 last_processed_run_id=excluded.last_processed_run_id
             """,
@@ -170,6 +186,7 @@ def upsert_task(record: dict) -> None:
                 record.get("message_timestamp"),
                 record.get("confidence"),
                 int(bool(record.get("review_required"))),
+                record.get("date"),
                 record.get("created_at"),
                 record.get("updated_at"),
                 record.get("last_processed_run_id"),
