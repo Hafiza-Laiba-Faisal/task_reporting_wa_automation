@@ -83,7 +83,10 @@ def init_db() -> None:
 
 
 def message_fingerprint(sender: str, message_text: str, timestamp: str, group_name: str) -> str:
-    source = f"{group_name}|{sender}|{timestamp}|{message_text.strip().lower()}"
+    # Normalize timestamp: remove AM/PM and spaces so "7:45 PM" == "7:45"
+    import re as _re
+    ts_normalized = _re.sub(r'\s*(AM|PM|am|pm)\s*$', '', str(timestamp).strip())
+    source = f"{group_name}|{sender}|{ts_normalized}|{message_text.strip().lower()}"
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 

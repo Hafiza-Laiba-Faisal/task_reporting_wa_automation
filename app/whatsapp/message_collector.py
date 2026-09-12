@@ -121,9 +121,12 @@ class MessageCollector:
           - We have scrolled MAX_SCROLL_ATTEMPTS times with no new content
         """
         MAX_ATTEMPTS  = 40
-        PAUSE_MS      = 800   # wait after each scroll for WhatsApp to load
+        PAUSE_MS      = 1200  # wait after each scroll for WhatsApp to lazy-load
         panel         = self.page.locator(_PANEL_SEL)
-        target_str    = target_date.strftime("%-d %b %Y").lower()  # e.g. "8 sep 2026"
+
+        logger.info("Waiting 5s for chat to fully load before scrolling...")
+        self.page.wait_for_timeout(5000)
+
         prev_height   = -1
         no_change_cnt = 0
 
@@ -133,7 +136,7 @@ class MessageCollector:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             # Check if target date divider is already on screen
             if self._date_divider_visible(target_date):
-                logger.info("Target date divider '%s' found after %d scrolls.", target_str, attempt)
+                logger.info("Target date divider found after %d scrolls.", attempt)
                 return
 
             # Scroll to top of panel
@@ -165,7 +168,7 @@ class MessageCollector:
 
             if attempt % 5 == 0:
                 dividers = self._visible_dividers()
-                logger.info("Scroll %d/%d | height=%d | dividers visible: %s",
+                logger.info("Scroll %d/%d | height=%d | dividers: %s",
                             attempt, MAX_ATTEMPTS, cur_height, dividers)
 
         logger.warning("Reached max scroll attempts (%d). Loading what's visible.", MAX_ATTEMPTS)
