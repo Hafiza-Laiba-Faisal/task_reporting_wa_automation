@@ -272,6 +272,21 @@ class GoogleSheetsWriter:
 
         # ── 5. Apply formatting via batchUpdate ───────────────────────────────
         svc = self._get_service()
+
+        # Step A: Apply freeze FIRST (before any merges — avoids frozen/non-frozen conflict)
+        freeze_req = [{"updateSheetProperties": {
+            "properties": {
+                "sheetId": sheet_id,
+                "gridProperties": {"frozenRowCount": 3, "frozenColumnCount": 0},
+            },
+            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+        }}]
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": freeze_req},
+        ).execute()
+
+        # Step B: All other formatting (merges, colors, column widths)
         requests = self._build_format_requests(
             sheet_id, data, sorted_dates, all_employees, total_cols
         )
@@ -411,14 +426,8 @@ class GoogleSheetsWriter:
             "fields": "pixelSize",
         }})
 
-        # ── Freeze header rows and date column ────────────────────────────────
-        reqs.append({"updateSheetProperties": {
-            "properties": {
-                "sheetId": sheet_id,
-                "gridProperties": {"frozenRowCount": 3, "frozenColumnCount": 1},
-            },
-            "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
-        }})
+        # NOTE: freeze is applied in a separate batchUpdate before this call
+        # to avoid the "frozen and non-frozen columns" merge conflict.
 
         return reqs
 

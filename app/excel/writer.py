@@ -92,38 +92,71 @@ class ExcelWriter:
 
     # ── Public entry point ────────────────────────────────────────────────────
     def write_tasks(self, rows: list[dict]) -> None:
+        """
+        Write tasks to Excel.
+        Strategy:
+        - Load existing workbook (if any)
+        - Read ALL existing rows from the sheet already there
+        - Merge with incoming rows: new dates OVERWRITE old same-date data
+        - Old dates NOT in the incoming rows are PRESERVED as-is
+        - Rebuild the full sheet with merged data
+        """
         if not rows:
             logger.info("No task rows to write to Excel.")
             return
 
-        # Structure:
-        #   data[day][employee] = {"tasks": [...], "statuses": [...]}
-        data: dict[str, dict[str, dict]] = defaultdict(
+        # ── 1. Parse incoming rows into data dict ─────────────────────────────
+        incoming: dict[str, dict[str, dict]] = defaultdict(
             lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
         )
-
         for r in rows:
             day      = _normalize_day(r.get("date") or r.get("created_at") or date.today().isoformat())
             assignee = str(r.get("assignee") or "Unknown").strip()
             task     = str(r.get("task") or "").strip()
             status   = str(r.get("status") or "open").lower().strip()
-
             for line in task.splitlines():
                 line = line.strip().lstrip("•").strip()
                 if line:
-                    data[day][assignee]["tasks"].append(line)
-
+                    incoming[day][assignee]["tasks"].append(line)
             if status:
-                data[day][assignee]["statuses"].append(status)
+                incoming[day][assignee]["statuses"].append(status)
 
+        incoming_dates = set(incoming.keys())
+
+        # ── 2. Load existing data from workbook (preserve old dates) ──────────
+        existing: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
         target = self.file_path
-        temp   = target.with_suffix(".tmp.xlsx")
+        if target.exists():
+            try:
+                wb_old = load_workbook(target)
+                if "Task Summary" in wb_old.sheetnames:
+                    ws_old = wb_old["Task Summary"]
+                    existing = self._read_existing_data(ws_old, incoming_dates)
+                    logger.info("Preserved %d old date rows from existing Excel.", len(existing))
+            except Exception as e:
+                logger.warning("Could not read existing workbook: %s — starting fresh.", e)
 
-        wb = load_workbook(target) if target.exists() else Workbook()
+        # ── 3. Merge: existing (old dates) + incoming (new dates) ─────────────
+        # incoming dates always win (overwrite); old dates are kept
+        data: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
+        for day, employees in existing.items():
+            for emp, d in employees.items():
+                data[day][emp]["tasks"]    = list(d["tasks"])
+                data[day][emp]["statuses"] = list(d["statuses"])
+        for day, employees in incoming.items():
+            for emp, d in employees.items():
+                data[day][emp]["tasks"]    = list(d["tasks"])
+                data[day][emp]["statuses"] = list(d["statuses"])
+
+        # ── 4. Write merged data ──────────────────────────────────────────────
+        temp = target.with_suffix(".tmp.xlsx")
+        wb   = Workbook()
         if "Sheet" in wb.sheetnames:
             del wb["Sheet"]
-        if "Task Summary" in wb.sheetnames:
-            del wb["Task Summary"]
 
         ws = wb.create_sheet(title="Task Summary", index=0)
         self._write_summary_sheet(ws, data)
@@ -131,7 +164,73 @@ class ExcelWriter:
 
         wb.save(temp)
         temp.replace(target)
-        logger.info("Excel workbook updated: %s", target)
+        logger.info("Excel workbook updated: %s (%d dates total)", target, len(data))
+
+    # ── Read existing sheet back into data dict ───────────────────────────────
+    def _read_existing_data(
+        self,
+        ws,
+        skip_dates: set[str],
+    ) -> dict[str, dict[str, dict]]:
+        """
+        Parse an existing Task Summary sheet back into data dict.
+        Skips any dates in skip_dates (those will be replaced by incoming data).
+        Reads row structure: col A = date label, then pairs (tasks, status) per employee.
+        Row 1 = title, Row 2 = employee headers, Row 3 = sub-headers, Row 4+ = data.
+        """
+        data: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
+
+        # Read employee names from row 2 (columns B, D, F, … — merged, so first col of each pair)
+        employees: list[str] = []
+        max_col = ws.max_column
+        col = 2
+        while col <= max_col:
+            cell_val = ws.cell(row=2, column=col).value
+            if cell_val and str(cell_val).strip():
+                employees.append(str(cell_val).strip())
+            col += 2   # each employee takes 2 cols
+
+        if not employees:
+            return data
+
+        # Read data rows (row 4 onward)
+        for row_idx in range(4, ws.max_row + 1):
+            date_cell = ws.cell(row=row_idx, column=1).value
+            if not date_cell:
+                continue
+            # Convert "08 Sep 2026" back to "2026-09-08"
+            try:
+                from datetime import datetime as _dt
+                iso = _dt.strptime(str(date_cell).strip(), "%d %b %Y").date().isoformat()
+            except Exception:
+                iso = str(date_cell).strip()
+
+            # Skip dates that will be overwritten by incoming data
+            if iso in skip_dates:
+                continue
+
+            for i, emp in enumerate(employees):
+                tasks_col  = 2 + i * 2
+                status_col = tasks_col + 1
+                tasks_cell  = ws.cell(row=row_idx, column=tasks_col).value or ""
+                status_cell = ws.cell(row=row_idx, column=status_col).value or ""
+
+                # Parse bullet points back into individual tasks
+                for line in str(tasks_cell).splitlines():
+                    line = line.strip().lstrip("•").strip()
+                    if line:
+                        data[iso][emp]["tasks"].append(line)
+
+                # Reverse-map status label back to key
+                status_reverse = {v: k for k, v in _STATUS_LABEL.items()}
+                raw_status = str(status_cell).strip()
+                status_key = status_reverse.get(raw_status, "open")
+                if data[iso][emp]["tasks"]:
+                    data[iso][emp]["statuses"].append(status_key)
+
+        return data
 
     # ── Sheet builder ─────────────────────────────────────────────────────────
     def _write_summary_sheet(self, ws, data: dict) -> None:
