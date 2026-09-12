@@ -8,14 +8,16 @@
   </head>
   <body>
     <div class="container">
+
+      <!-- Header -->
       <div class="header">
         <div>
           <h1>📱 WhatsApp Task Automation</h1>
-          <p class="subtitle">Collect, extract & track tasks from WhatsApp groups automatically</p>
+          <p class="subtitle">Collect, extract &amp; track tasks from WhatsApp groups automatically</p>
         </div>
         <div class="header-status">
           <div class="status-item">
-            <span class="label">System Status</span>
+            <span class="label">System</span>
             <span class="badge badge-green" id="statusBadge">Ready</span>
           </div>
         </div>
@@ -35,12 +37,12 @@
         </div>
         <div class="stat-card">
           <div class="stat-label">👥 Active Group</div>
-          <div class="stat-value" id="statGroup">Not Set</div>
+          <div class="stat-value stat-value-sm" id="statGroup">Not Set</div>
           <div class="stat-detail" id="statGroupDetail">Configure in settings below</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">⏱️ Last Run</div>
-          <div class="stat-value" id="statLastRun">Never</div>
+          <div class="stat-value stat-value-sm" id="statLastRun">Never</div>
           <div class="stat-detail" id="statLastRunDetail">Press Run to collect tasks</div>
         </div>
       </div>
@@ -56,62 +58,37 @@
         <button id="downloadExcelBtn" class="btn-secondary" title="Download tasks as Excel file">
           ⬇️ Download Excel
         </button>
-        <button id="refreshAllBtn" class="btn-secondary btn-small" title="Refresh all data from server">
+        <button id="syncSheetsBtn" class="btn-secondary" title="Sync current tasks to Google Sheets">
+          🔗 Sync to Google Sheets
+        </button>
+        <button id="refreshAllBtn" class="btn-secondary btn-small" title="Refresh all data">
           🔃 Refresh All
         </button>
       </div>
 
-      <!-- Status/Output Box -->
+      <!-- Operation Status -->
       <div class="card">
         <div class="status-header">
           <h3>📝 Operation Status</h3>
           <button id="clearStatusBtn" class="btn-tiny">Clear</button>
         </div>
-        <div class="output" id="statusBox">System ready. Configure settings and click "Run Task Extraction" to start.</div>
+        <div class="output" id="statusBox">System ready. Configure settings below and click "Run Task Extraction" to start.</div>
       </div>
 
-      <!-- Configuration Section -->
+      <!-- ══════════════════════════ CONFIGURATION ══════════════════════════ -->
       <div class="card">
-        <h2 class="section-title">⚙️ Configuration</h2>
+        <h2 class="section-title">⚙️ General Configuration</h2>
         <form id="configForm">
           <div class="form-row">
             <div class="form-group">
               <label>Target WhatsApp Group *</label>
-              <input 
-                id="groupName" 
-                name="whatsapp_group_name" 
-                placeholder="e.g., Tenbit Operations" 
-                required 
-                title="Name of the WhatsApp group to monitor"
-              />
-              <small>Name must match exactly as shown in WhatsApp</small>
-            </div>
-            <div class="form-group">
-              <label>LLM Provider</label>
-              <select id="modelName" name="llm_model" title="Choose the AI model for task extraction">
-                <option value="mistral-small-latest">Mistral Small (Fast & Free)</option>
-                <option value="mistral-large-latest">Mistral Large (More Accurate)</option>
-                <option value="gpt-4-turbo">OpenRouter: GPT-4 Turbo</option>
-                <option value="ollama-local">Ollama: Local Model</option>
-              </select>
-              <small>Select model based on accuracy/speed needs</small>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label>LLM API Key (Optional)</label>
-              <input 
-                id="mistralKey" 
-                name="llm_api_key" 
-                type="password" 
-                placeholder="Leave blank to use .env" 
-                title="Leave blank to use API key from .env file"
-              />
-              <small>Will use environment variable if empty</small>
+              <input id="groupName" name="whatsapp_group_name"
+                     placeholder="e.g., TenBit_Daily_Task_Reporting" required />
+              <small>Must match exactly as shown in WhatsApp</small>
             </div>
             <div class="form-group">
               <label>Execution Mode</label>
-              <select id="dryRun" name="dry_run" title="Test mode: log actions without modifying DB">
+              <select id="dryRun" name="dry_run">
                 <option value="false">✅ Production (Save to DB)</option>
                 <option value="true">🧪 Test Mode (Dry Run)</option>
               </select>
@@ -119,13 +96,114 @@
             </div>
           </div>
           <div class="form-actions">
-            <button type="submit" class="btn-primary">💾 Save Configuration</button>
-            <button type="button" id="testConfigBtn" class="btn-secondary">🧪 Test Connection</button>
+            <button type="submit" class="btn-primary">💾 Save</button>
           </div>
         </form>
       </div>
 
-      <!-- Database Viewer -->
+      <!-- ══════════════════════════ LLM CONFIG ══════════════════════════ -->
+      <div class="card">
+        <h2 class="section-title">🤖 LLM Provider Configuration</h2>
+        <form id="llmForm">
+          <div class="form-row">
+            <div class="form-group">
+              <label>LLM Provider</label>
+              <select id="llmProvider" name="llm_provider" onchange="onProviderChange()">
+                <option value="openrouter">OpenRouter (Free Models)</option>
+                <option value="nvidia">NVIDIA NIM</option>
+                <option value="mistral">Mistral</option>
+                <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama (Local)</option>
+              </select>
+              <small>All providers use OpenAI-compatible API</small>
+            </div>
+            <div class="form-group" id="modelGroup">
+              <label>Model</label>
+              <select id="llmModel" name="llm_model">
+                <!-- populated by JS based on provider -->
+              </select>
+              <small id="modelHelp">Select the model to use</small>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group" id="apiKeyGroup">
+              <label id="apiKeyLabel">API Key</label>
+              <input id="llmApiKey" name="llm_api_key" type="password"
+                     placeholder="Leave blank to use .env value" />
+              <small>Optional — leave blank to use .env</small>
+            </div>
+            <div class="form-group" id="baseUrlGroup">
+              <label id="baseUrlLabel">Base URL</label>
+              <input id="llmBaseUrl" name="llm_base_url"
+                     placeholder="Leave blank for default" />
+              <small id="baseUrlHelp">Custom base URL (optional)</small>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn-primary">💾 Save LLM Config</button>
+            <button type="button" id="testLlmBtn" class="btn-secondary">🧪 Test Connection</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- ══════════════════════ GOOGLE SHEETS ══════════════════════════ -->
+      <div class="card">
+        <h2 class="section-title">📊 Google Sheets Integration</h2>
+        <form id="googleSheetsForm">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Enable Google Sheets Sync</label>
+              <div class="toggle-row">
+                <label class="toggle">
+                  <input type="checkbox" id="gsEnabled" name="enabled" />
+                  <span class="toggle-slider"></span>
+                </label>
+                <span id="gsEnabledLabel" class="toggle-label">Disabled</span>
+              </div>
+              <small>Auto-sync tasks to Google Sheets after each run</small>
+            </div>
+            <div class="form-group">
+              <label>Spreadsheet ID</label>
+              <input id="gsSheetId" name="sheet_id"
+                     placeholder="1abc...xyz (from Google Sheets URL)" />
+              <small>Found in the Google Sheets URL</small>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Service Account Credentials (JSON path)</label>
+              <input id="gsCredentials" name="credentials_path"
+                     placeholder="./credentials.json" />
+              <small>Path to your Google service account JSON file</small>
+            </div>
+            <div class="form-group">
+              <label>Share With (emails, comma-separated)</label>
+              <input id="gsShareWith" name="share_with"
+                     placeholder="user@example.com, team@example.com" />
+              <small>Auto-shared after each sync</small>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Sheet Tab Name</label>
+              <input id="gsSheetName" name="sheet_name" value="Task Summary"
+                     placeholder="Task Summary" />
+              <small>Name of the worksheet tab</small>
+            </div>
+            <div class="form-group gs-info-box" id="gsSheetLinkBox" style="display:none">
+              <label>Sheet Link</label>
+              <a id="gsSheetLink" href="#" target="_blank" class="sheet-link">—</a>
+              <small>Click to open Google Sheet</small>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn-primary">💾 Save Sheets Config</button>
+            <button type="button" id="testSheetsBtn" class="btn-secondary">🧪 Test Connection</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- ══════════════════════════ DB VIEWER ══════════════════════════ -->
       <div class="card">
         <h2 class="section-title">🗄️ Database Viewer</h2>
         <div class="tab-bar">
@@ -136,15 +214,8 @@
         <!-- Tasks table -->
         <div id="tab-tasks" class="tab-content">
           <div class="table-toolbar">
-            <input 
-              type="text" 
-              id="taskSearch" 
-              placeholder="Search tasks..." 
-              class="search-input"
-              title="Filter tasks by assignee or task name"
-            />
-            <button id="refreshTasksBtn" class="btn-small">🔄 Refresh</button>
-            <span id="tasksCount" class="count-badge">0 tasks</span>
+            <input type="text" id="taskSearch" placeholder="Search tasks or assignee..."
+                   class="search-input" />
             <select id="taskFilter" class="filter-select">
               <option value="">All Status</option>
               <option value="completed">✅ Completed</option>
@@ -152,6 +223,8 @@
               <option value="open">📝 Open</option>
               <option value="blocked">🚫 Blocked</option>
             </select>
+            <button id="refreshTasksBtn" class="btn-small">🔄 Refresh</button>
+            <span id="tasksCount" class="count-badge">0 tasks</span>
           </div>
           <div class="table-wrap">
             <table id="tasksTable">
@@ -168,7 +241,7 @@
                 </tr>
               </thead>
               <tbody id="tasksBody">
-                <tr><td colspan="8" style="text-align:center;color:#888;padding:20px">No tasks yet. Run extraction to populate.</td></tr>
+                <tr><td colspan="8" class="empty-row">No tasks yet. Run extraction to populate.</td></tr>
               </tbody>
             </table>
           </div>
@@ -177,18 +250,13 @@
         <!-- Messages table -->
         <div id="tab-messages" class="tab-content" style="display:none">
           <div class="table-toolbar">
-            <input 
-              type="text" 
-              id="msgSearch" 
-              placeholder="Search messages..." 
-              class="search-input"
-              title="Filter messages by sender or content"
-            />
-            <button id="refreshMsgsBtn" class="btn-small">🔄 Refresh</button>
-            <span id="msgsCount" class="count-badge">0 messages</span>
+            <input type="text" id="msgSearch" placeholder="Search messages or sender..."
+                   class="search-input" />
             <select id="msgFilter" class="filter-select">
               <option value="">All Senders</option>
             </select>
+            <button id="refreshMsgsBtn" class="btn-small">🔄 Refresh</button>
+            <span id="msgsCount" class="count-badge">0 messages</span>
           </div>
           <div class="table-wrap">
             <table id="msgsTable">
@@ -201,23 +269,21 @@
                 </tr>
               </thead>
               <tbody id="msgsBody">
-                <tr><td colspan="4" style="text-align:center;color:#888;padding:20px">No messages yet. Run extraction to populate.</td></tr>
+                <tr><td colspan="4" class="empty-row">No messages yet. Run extraction to populate.</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      <!-- System Info Footer -->
+      <!-- Footer -->
       <div class="footer">
         <div class="footer-content">
           <div class="footer-info">
-            <p>WhatsApp Task Automation System v1.0</p>
-            <small>Backend: FastAPI | Database: SQLite | LLM: Mistral/OpenRouter</small>
+            <p>WhatsApp Task Automation v1.0 &mdash; FastAPI + SQLite + OpenAI-Compatible LLMs</p>
           </div>
           <div class="footer-timestamp">
-            <p>Last Update: <span id="footerTime">—</span></p>
-            <small>Server Time: <span id="serverTime">—</span></small>
+            <p>Updated: <span id="footerTime">—</span></p>
           </div>
         </div>
       </div>

@@ -42,6 +42,15 @@ class Settings:
         self.max_messages_per_run = int(os.getenv("MAX_MESSAGES_PER_RUN", "200"))
         self.max_group_search_wait_seconds = int(os.getenv("MAX_GROUP_SEARCH_WAIT_SECONDS", "60"))
 
+        # ── Google Sheets ──────────────────────────────────────────────────────
+        self.google_sheets_enabled     = os.getenv("GOOGLE_SHEETS_ENABLED", "false").lower() == "true"
+        self.google_sheets_id          = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+        self.google_sheets_credentials = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "").strip()
+        self.google_sheets_share_with  = [
+            e.strip() for e in os.getenv("GOOGLE_SHEETS_SHARE_WITH", "").split(",") if e.strip()
+        ]
+        self.google_sheets_sheet_name  = os.getenv("GOOGLE_SHEETS_SHEET_NAME", "Task Summary")
+
         # Sender name mapping: "92xxxxxxxxxx=Real Name,92yyyyy=Other Name"
         # or JSON: {"92xxxxxxxxxx": "Real Name"}
         self.sender_name_map: dict[str, str] = self._parse_sender_map(

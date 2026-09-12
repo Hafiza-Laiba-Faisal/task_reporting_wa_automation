@@ -592,3 +592,98 @@ tbody td {
     padding: 6px 8px;
   }
 }
+
+/* ── Stat value small variant ── */
+.stat-value-sm {
+  font-size: 1.2rem;
+  word-break: break-all;
+}
+
+/* ── Toggle switch ── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #475569;
+  border-radius: 26px;
+  transition: 0.3s;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  border-radius: 50%;
+  transition: 0.3s;
+}
+
+.toggle input:checked + .toggle-slider {
+  background-color: #2563eb;
+}
+
+.toggle input:checked + .toggle-slider:before {
+  transform: translateX(22px);
+}
+
+.toggle-label {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+/* ── Google Sheets link ── */
+.sheet-link {
+  display: inline-block;
+  color: #60a5fa;
+  font-size: 0.85rem;
+  word-break: break-all;
+  text-decoration: none;
+  padding: 6px 0;
+}
+
+.sheet-link:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.gs-info-box {
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* ── Empty table row ── */
+.empty-row {
+  text-align: center;
+  padding: 24px !important;
+  color: #64748b !important;
+  font-style: italic;
+}

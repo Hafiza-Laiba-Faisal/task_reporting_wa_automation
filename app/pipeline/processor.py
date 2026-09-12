@@ -98,12 +98,8 @@ class TaskProcessor:
         logger.info("Extracted %d tasks from %d messages.", len(tasks), len(valid_messages))
         return tasks
 
-    def write_excel(self, tasks: list[dict]) -> None:
-        if self.dry_run:
-            logger.info("Dry run enabled; no Excel update performed.")
-            return
-
-        # Pull ALL tasks from DB (not just this run) so Excel always shows full picture
+    def _get_all_task_rows(self) -> list[dict]:
+        """Read all tasks from DB and return as flat list of row dicts."""
         from app.database.repository import get_connection
         conn = get_connection()
         conn.row_factory = __import__("sqlite3").Row
@@ -111,21 +107,57 @@ class TaskProcessor:
             "SELECT task, assignee, status, priority, deadline, date, created_at FROM tasks ORDER BY date, assignee"
         ).fetchall()]
         conn.close()
-
-        rows = []
-        for t in all_tasks:
-            rows.append({
+        return [
+            {
                 "task":     t.get("task", ""),
                 "assignee": t.get("assignee", ""),
                 "status":   t.get("status", "open"),
                 "priority": t.get("priority", "medium"),
                 "deadline": t.get("deadline", ""),
                 "date":     t.get("date") or t.get("created_at", "")[:10],
-            })
+            }
+            for t in all_tasks
+        ]
 
+    def write_excel(self, tasks: list[dict]) -> None:
+        if self.dry_run:
+            logger.info("Dry run enabled; no Excel update performed.")
+            return
+        rows = self._get_all_task_rows()
         writer = ExcelWriter(self.cfg.excel_output_path)
         writer.write_tasks(rows)
         logger.info("Excel updated with %d total tasks.", len(rows))
+
+    def write_google_sheets(self, tasks: list[dict]) -> str:
+        """Sync all tasks to Google Sheets. Returns sheet URL or empty string."""
+        if self.dry_run:
+            logger.info("Dry run enabled; skipping Google Sheets sync.")
+            return ""
+        if not self.cfg.google_sheets_enabled:
+            return ""
+        if not self.cfg.google_sheets_id:
+            logger.warning("GOOGLE_SHEETS_ID not set — skipping Sheets sync.")
+            return ""
+        if not self.cfg.google_sheets_credentials:
+            logger.warning("GOOGLE_SHEETS_CREDENTIALS not set — skipping Sheets sync.")
+            return ""
+
+        try:
+            from app.google_sheets.writer import GoogleSheetsWriter
+            rows   = self._get_all_task_rows()
+            writer = GoogleSheetsWriter(
+                spreadsheet_id=self.cfg.google_sheets_id,
+                credentials_path=self.cfg.google_sheets_credentials,
+                sheet_name=self.cfg.google_sheets_sheet_name,
+            )
+            url = writer.write_tasks(rows)
+            if self.cfg.google_sheets_share_with:
+                writer.share_with_team(self.cfg.google_sheets_share_with)
+            logger.info("Google Sheets synced: %s", url)
+            return url
+        except Exception as e:
+            logger.error("Google Sheets sync failed: %s", e)
+            return ""
 
     def run(self) -> list[dict]:
         init_db()
@@ -134,6 +166,7 @@ class TaskProcessor:
         record_run(run_id, self.cfg.whatsapp_group_name, started_at, "running")
         tasks = self.extract_tasks()
         self.write_excel(tasks)
+        sheets_url = self.write_google_sheets(tasks)
         finalize_run(
             run_id,
             datetime.utcnow().isoformat(timespec="seconds"),
@@ -146,4 +179,5 @@ class TaskProcessor:
             duplicates=0,
         )
         logger.info("Run completed for group: %s", self.cfg.whatsapp_group_name)
+        result = {"tasks": tasks, "sheets_url": sheets_url}
         return tasks
