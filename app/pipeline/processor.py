@@ -43,6 +43,24 @@ class TaskProcessor:
         # Date the messages belong to (used for task fingerprinting + Excel date column)
         self.run_date = _resolve_message_date(messages) if messages else _today_iso()
 
+    def _fix_known_aliases(self) -> None:
+        """
+        Post-extraction correction:
+        - AT → Ayan (WhatsApp alias used by Ayan)
+        - unknown with no source_sender → keep as-is (cannot infer)
+        Runs after every extract_tasks() call to keep DB clean.
+        """
+        from app.database.repository import get_connection
+        conn = get_connection()
+        # AT is always Ayan per SENDER_NAME_MAP
+        updated = conn.execute(
+            "UPDATE tasks SET assignee='Ayan', source_sender='Ayan' WHERE assignee='AT'"
+        ).rowcount
+        conn.commit()
+        conn.close()
+        if updated:
+            logger.info("Alias fix: AT → Ayan (%d tasks)", updated)
+
     def extract_tasks(self) -> list[dict]:
         """
         Send all messages to LLM in one batch call so it understands
@@ -96,6 +114,7 @@ class TaskProcessor:
                 upsert_task(record)
 
         logger.info("Extracted %d tasks from %d messages.", len(tasks), len(valid_messages))
+        self._fix_known_aliases()
         return tasks
 
     def _get_recent_task_rows(self, days: int = 2) -> list[dict]:
