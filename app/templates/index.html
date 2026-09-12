@@ -8,51 +8,97 @@
   </head>
   <body>
     <div class="container">
-      <h1>WhatsApp Task Automation</h1>
+      <div class="header">
+        <div>
+          <h1>WhatsApp Task Automation</h1>
+          <p class="subtitle">Collect, extract & track tasks from WhatsApp groups</p>
+        </div>
+        <div class="header-status">
+          <div class="status-item">
+            <span class="label">Status</span>
+            <span class="badge badge-green" id="statusBadge">Ready</span>
+          </div>
+        </div>
+      </div>
 
-      <!-- Config -->
+      <!-- Dashboard -->
+      <div class="dashboard">
+        <div class="stat-card">
+          <div class="stat-label">Total Tasks</div>
+          <div class="stat-value" id="statTasks">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Messages</div>
+          <div class="stat-value" id="statMessages">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active Group</div>
+          <div class="stat-value" id="statGroup">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Last Run</div>
+          <div class="stat-value" id="statLastRun">Never</div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card actions-section">
+        <button id="runBtn" class="btn-primary btn-large">▶ Run Task Extraction</button>
+        <button id="reprocessBtn" class="btn-secondary">↻ Reprocess from DB</button>
+        <button id="downloadExcelBtn" class="btn-secondary">⬇ Download Excel</button>
+      </div>
+
+      <!-- Status Output -->
+      <div class="card output" id="statusBox">Ready.</div>
+
+      <!-- Configuration Section -->
       <div class="card">
+        <h2 class="section-title">Configuration</h2>
         <form id="configForm">
-          <label>Target group name</label>
-          <input id="groupName" name="whatsapp_group_name" placeholder="ABC Company - Operations" required />
-
-          <label>Dry run</label>
-          <select id="dryRun" name="dry_run">
-            <option value="false">No</option>
-            <option value="true">Yes</option>
-          </select>
-
-          <label>Mistral API key</label>
-          <input id="mistralKey" name="llm_api_key" type="password" placeholder="Optional if already in .env" />
-
-          <label>Mistral model</label>
-          <input id="modelName" name="llm_model" value="mistral-small-latest" />
-
-          <button type="submit">Save Config</button>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target WhatsApp Group</label>
+              <input id="groupName" name="whatsapp_group_name" placeholder="e.g., Tenbit Operations" required />
+            </div>
+            <div class="form-group">
+              <label>LLM Model</label>
+              <select id="modelName" name="llm_model">
+                <option value="mistral-small-latest">Mistral Small (Fast)</option>
+                <option value="mistral-large-latest">Mistral Large (Accurate)</option>
+                <option value="gpt-4-turbo">OpenRouter: GPT-4 Turbo</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>LLM API Key (optional, uses .env if empty)</label>
+              <input id="mistralKey" name="llm_api_key" type="password" placeholder="Leave blank to use .env" />
+            </div>
+            <div class="form-group">
+              <label>Dry Run Mode</label>
+              <select id="dryRun" name="dry_run">
+                <option value="false">Production</option>
+                <option value="true">Test Only</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" class="btn-primary">💾 Save Configuration</button>
         </form>
       </div>
 
-      <!-- Actions -->
-      <div class="card actions">
-        <button id="runBtn">▶ Run Task Extraction</button>
-        <button id="reprocessBtn" class="btn-secondary">↻ Reprocess from DB</button>
-      </div>
-
-      <!-- Status -->
-      <div class="card output" id="statusBox">Ready.</div>
-
       <!-- DB Viewer Tabs -->
       <div class="card">
+        <h2 class="section-title">Database Viewer</h2>
         <div class="tab-bar">
-          <button class="tab-btn active" data-tab="tasks">Tasks DB</button>
-          <button class="tab-btn" data-tab="messages">Messages DB</button>
+          <button class="tab-btn active" data-tab="tasks">📋 Tasks</button>
+          <button class="tab-btn" data-tab="messages">💬 Messages</button>
         </div>
 
         <!-- Tasks table -->
         <div id="tab-tasks" class="tab-content">
           <div class="table-toolbar">
-            <button id="refreshTasksBtn" class="btn-small">Refresh</button>
-            <span id="tasksCount" class="count-badge"></span>
+            <button id="refreshTasksBtn" class="btn-small">🔄 Refresh</button>
+            <span id="tasksCount" class="count-badge">0 tasks</span>
           </div>
           <div class="table-wrap">
             <table id="tasksTable">
@@ -63,12 +109,14 @@
                   <th>Status</th>
                   <th>Priority</th>
                   <th>Deadline</th>
-                  <th>Sender</th>
+                  <th>Source</th>
                   <th>Time</th>
                   <th>Confidence</th>
                 </tr>
               </thead>
-              <tbody id="tasksBody"></tbody>
+              <tbody id="tasksBody">
+                <tr><td colspan="8" style="text-align:center;color:#888">Loading...</td></tr>
+              </tbody>
             </table>
           </div>
         </div>
@@ -76,8 +124,8 @@
         <!-- Messages table -->
         <div id="tab-messages" class="tab-content" style="display:none">
           <div class="table-toolbar">
-            <button id="refreshMsgsBtn" class="btn-small">Refresh</button>
-            <span id="msgsCount" class="count-badge"></span>
+            <button id="refreshMsgsBtn" class="btn-small">🔄 Refresh</button>
+            <span id="msgsCount" class="count-badge">0 messages</span>
           </div>
           <div class="table-wrap">
             <table id="msgsTable">
@@ -86,13 +134,20 @@
                   <th>Sender</th>
                   <th>Message</th>
                   <th>Time</th>
-                  <th>Collected At</th>
+                  <th>Collected</th>
                 </tr>
               </thead>
-              <tbody id="msgsBody"></tbody>
+              <tbody id="msgsBody">
+                <tr><td colspan="4" style="text-align:center;color:#888">Loading...</td></tr>
+              </tbody>
             </table>
           </div>
         </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p>WhatsApp Task Automation System v1.0 | Last updated: <span id="footerTime">—</span></p>
       </div>
     </div>
 
