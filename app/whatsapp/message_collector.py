@@ -12,69 +12,78 @@ from app.logger import get_logger
 
 logger = get_logger("message_collector")
 
+# ── Selectors ─────────────────────────────────────────────────────────────────
+_PANEL_SEL    = "div[data-testid='conversation-panel-messages']"
+_DIVIDER_SEL  = "div[data-testid='msg-date-divider']"
+_MSG_SELS     = [
+    "div[data-testid='msg-container']",
+    "div.message-in, div.message-out",
+    "div[role='row']",
+]
+
 
 class MessageCollector:
     def __init__(self, page: Page, run_id: str) -> None:
-        self.page = page
-        self.run_id = run_id
-        self.cfg = settings()
+        self.page    = page
+        self.run_id  = run_id
+        self.cfg     = settings()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
     def collect(self) -> list[dict[str, Any]]:
         """
-        Scroll up enough to load TARGET_WINDOW_DAYS worth of messages,
-        then collect ALL visible messages. Duplicates are skipped via
-        message_fingerprint. Each message gets the actual calendar date
-        attached (derived from WhatsApp date dividers).
+        1. Scroll up until target date divider is visible (or max attempts)
+        2. Build date map from all visible dividers
+        3. Walk every message row top-to-bottom, tagging each with its date
+        4. Save new messages to DB (skip duplicates via fingerprint)
         """
-        self._scroll_to_load_history()
+        target_date = date.today() - timedelta(days=self.cfg.target_window_days - 1)
+        logger.info(
+            "Collecting messages back to %s (%d days)",
+            target_date.isoformat(), self.cfg.target_window_days
+        )
 
-        message_selectors = [
-            "div[data-testid='msg-container']",
-            "div.message-in, div.message-out",
-            "div[role='row']",
-        ]
+        # ── Step 1: scroll until target date visible ──────────────────────────
+        self._scroll_until_date_visible(target_date)
 
-        all_rows = None
-        for sel in message_selectors:
-            try:
-                loc = self.page.locator(sel)
-                if loc.count():
-                    all_rows = loc
-                    logger.info("Collecting messages via selector: %s (%d rows)", sel, loc.count())
-                    break
-            except Exception:
-                continue
+        # ── Step 2: build date divider → YYYY-MM-DD map ───────────────────────
+        date_map = self._build_date_map()
+        logger.info("Date dividers found: %s", list(date_map.values()))
 
+        # ── Step 3: find message rows ─────────────────────────────────────────
+        all_rows = self._find_message_rows()
         if all_rows is None:
-            logger.warning("No message rows found in the conversation pane.")
+            logger.warning("No message rows found.")
             return []
 
-        # Build a date map: approximate which calendar date each message belongs to
-        # by scanning the full page text for WhatsApp date dividers.
-        date_map = self._build_date_map()
-
-        existing_fps = existing_message_fingerprints()
-        collected: list[dict[str, Any]] = []
-        skipped_dup = 0
-
         total = min(all_rows.count(), self.cfg.max_messages_per_run)
+        logger.info("Processing %d visible message rows.", total)
+
+        # ── Step 4: collect each row with proper date ─────────────────────────
+        existing_fps  = existing_message_fingerprints()
+        collected:    list[dict[str, Any]] = []
+        skipped_dup   = 0
+        current_date  = date.today().isoformat()   # fallback until first divider seen
+
         for i in range(total):
-            row = all_rows.nth(i)
+            row  = all_rows.nth(i)
             text = (row.inner_text() or "").strip()
             if not text:
                 continue
 
+            # Check if this row IS a date divider (update current_date)
+            maybe_date = self._check_if_divider(text, date_map)
+            if maybe_date:
+                current_date = maybe_date
+                logger.debug("Date changed to: %s", current_date)
+                continue
+
             sender, message_text = self._extract_sender_and_text(text)
-            timestamp = self._extract_timestamp(text)
             if not sender or not message_text:
                 continue
 
-            sender = self.cfg.resolve_sender_name(sender)
-
-            # Determine message date from divider map
-            msg_date = self._resolve_date_for_message(text, timestamp, date_map)
+            sender    = self.cfg.resolve_sender_name(sender)
+            timestamp = self._extract_timestamp(text)
 
             fp = message_fingerprint(sender, message_text, timestamp, self.cfg.whatsapp_group_name)
             if fp in existing_fps:
@@ -82,137 +91,191 @@ class MessageCollector:
                 continue
 
             record = {
-                "run_id":                   self.run_id,
-                "group_name":               self.cfg.whatsapp_group_name,
-                "sender":                   sender,
-                "message_text_raw":         text,
-                "message_text_normalized":  message_text,
-                "message_timestamp":        timestamp,
-                "message_date":             msg_date,        # YYYY-MM-DD
-                "message_fingerprint":      fp,
-                "processed_at":             datetime.now().isoformat(timespec="seconds"),
-                "status":                   "new",
+                "run_id":                  self.run_id,
+                "group_name":              self.cfg.whatsapp_group_name,
+                "sender":                  sender,
+                "message_text_raw":        text,
+                "message_text_normalized": message_text,
+                "message_timestamp":       timestamp,
+                "message_date":            current_date,
+                "message_fingerprint":     fp,
+                "processed_at":            datetime.now().isoformat(timespec="seconds"),
+                "status":                  "new",
             }
             collected.append(record)
             existing_fps.add(fp)
             upsert_message(record)
 
         logger.info(
-            "Collected %d new messages. Skipped %d duplicates.",
+            "Collected %d new messages | Skipped %d duplicates.",
             len(collected), skipped_dup
         )
         return collected
 
-    # ── Scroll history ────────────────────────────────────────────────────────
+    # ── Scroll until target date visible ──────────────────────────────────────
 
-    def _scroll_to_load_history(self) -> None:
+    def _scroll_until_date_visible(self, target_date: date) -> None:
         """
-        Scroll up in the chat panel to load messages from the last
-        TARGET_WINDOW_DAYS days. WhatsApp lazy-loads older messages.
+        Keep scrolling up in the chat panel until:
+          - A date divider for target_date (or earlier) is visible, OR
+          - We have scrolled MAX_SCROLL_ATTEMPTS times with no new content
         """
-        days = self.cfg.target_window_days
-        logger.info("Scrolling up to load %d day(s) of history...", days)
+        MAX_ATTEMPTS  = 40
+        PAUSE_MS      = 800   # wait after each scroll for WhatsApp to load
+        panel         = self.page.locator(_PANEL_SEL)
+        target_str    = target_date.strftime("%-d %b %Y").lower()  # e.g. "8 sep 2026"
+        prev_height   = -1
+        no_change_cnt = 0
 
-        panel_sel = "div[data-testid='conversation-panel-messages']"
-        try:
-            panel = self.page.locator(panel_sel)
-            # Scroll up several times to trigger lazy-load
-            for _ in range(max(3, days * 2)):
+        logger.info("Scrolling to load history (target: %s, max %d scrolls)...",
+                    target_date.isoformat(), MAX_ATTEMPTS)
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            # Check if target date divider is already on screen
+            if self._date_divider_visible(target_date):
+                logger.info("Target date divider '%s' found after %d scrolls.", target_str, attempt)
+                return
+
+            # Scroll to top of panel
+            try:
                 panel.evaluate("el => el.scrollTop = 0")
-                self.page.wait_for_timeout(600)
-        except Exception as e:
-            logger.warning("Scroll attempt failed: %s", e)
+            except Exception:
+                pass
 
-    # ── Date divider map ──────────────────────────────────────────────────────
+            self.page.wait_for_timeout(PAUSE_MS)
+
+            # Detect if page actually loaded new content
+            try:
+                cur_height = panel.evaluate("el => el.scrollHeight")
+            except Exception:
+                cur_height = prev_height
+
+            if cur_height == prev_height:
+                no_change_cnt += 1
+                if no_change_cnt >= 5:
+                    logger.info(
+                        "No new content after %d consecutive scrolls — reached top of chat.",
+                        no_change_cnt
+                    )
+                    return
+            else:
+                no_change_cnt = 0
+
+            prev_height = cur_height
+
+            if attempt % 5 == 0:
+                dividers = self._visible_dividers()
+                logger.info("Scroll %d/%d | height=%d | dividers visible: %s",
+                            attempt, MAX_ATTEMPTS, cur_height, dividers)
+
+        logger.warning("Reached max scroll attempts (%d). Loading what's visible.", MAX_ATTEMPTS)
+
+    def _date_divider_visible(self, target_date: date) -> bool:
+        """Return True if any divider on screen matches target_date or earlier."""
+        try:
+            dividers = self.page.locator(_DIVIDER_SEL)
+            for i in range(dividers.count()):
+                txt = (dividers.nth(i).inner_text() or "").strip()
+                parsed = self._parse_date_string(txt)
+                if parsed:
+                    d = date.fromisoformat(parsed)
+                    if d <= target_date:
+                        return True
+                if txt.lower() in ("today", "yesterday"):
+                    pass  # these are always recent, keep scrolling
+        except Exception:
+            pass
+        return False
+
+    def _visible_dividers(self) -> list[str]:
+        """Return text of all visible date dividers."""
+        result = []
+        try:
+            dividers = self.page.locator(_DIVIDER_SEL)
+            for i in range(dividers.count()):
+                txt = (dividers.nth(i).inner_text() or "").strip()
+                if txt:
+                    result.append(txt)
+        except Exception:
+            pass
+        return result
+
+    # ── Date map builder ──────────────────────────────────────────────────────
 
     def _build_date_map(self) -> dict[str, str]:
         """
-        Parse WhatsApp date dividers from the page to build a mapping:
-          divider_text_lower → YYYY-MM-DD
-
-        WhatsApp shows dividers like:
-          "Today", "Yesterday", "10 Sep 2026", "8 Sep 2026"
+        Returns {divider_text_lower: YYYY-MM-DD} for all visible dividers.
         """
         today = date.today()
         mapping: dict[str, str] = {
             "today":     today.isoformat(),
             "yesterday": (today - timedelta(days=1)).isoformat(),
         }
-
         try:
-            dividers = self.page.locator("div[data-testid='msg-date-divider']")
+            dividers = self.page.locator(_DIVIDER_SEL)
             for i in range(dividers.count()):
-                txt = (dividers.nth(i).inner_text() or "").strip()
+                txt   = (dividers.nth(i).inner_text() or "").strip()
                 lower = txt.lower()
-                if lower in mapping:
-                    continue
-                # Try parsing "10 Sep 2026" or "Sep 10, 2026" etc.
-                parsed = self._parse_date_string(txt)
-                if parsed:
-                    mapping[lower] = parsed
+                if lower not in mapping:
+                    parsed = self._parse_date_string(txt)
+                    if parsed:
+                        mapping[lower] = parsed
         except Exception as e:
-            logger.debug("Date divider scan failed: %s", e)
-
-        logger.debug("Date map built: %s", mapping)
+            logger.debug("Date map build error: %s", e)
         return mapping
 
+    def _check_if_divider(self, text: str, date_map: dict[str, str]) -> str | None:
+        """If row text matches a date divider, return its YYYY-MM-DD else None."""
+        lower = text.strip().lower()
+        # Exact match first
+        if lower in date_map:
+            return date_map[lower]
+        # Try parsing the text directly
+        parsed = self._parse_date_string(text.strip())
+        if parsed:
+            return parsed
+        return None
+
+    # ── Message row finder ────────────────────────────────────────────────────
+
+    def _find_message_rows(self):
+        for sel in _MSG_SELS:
+            try:
+                loc = self.page.locator(sel)
+                if loc.count():
+                    logger.info("Using selector '%s' (%d rows)", sel, loc.count())
+                    return loc
+            except Exception:
+                continue
+        return None
+
+    # ── Parsing helpers ───────────────────────────────────────────────────────
+
     def _parse_date_string(self, text: str) -> str | None:
-        """Try to parse a date string like '10 Sep 2026' → '2026-09-10'."""
-        formats = [
-            "%d %b %Y",   # 10 Sep 2026
-            "%d %B %Y",   # 10 September 2026
-            "%B %d, %Y",  # September 10, 2026
-            "%b %d, %Y",  # Sep 10, 2026
-            "%d/%m/%Y",   # 10/09/2026
-        ]
-        for fmt in formats:
+        """'10 Sep 2026' → '2026-09-10'"""
+        for fmt in ("%d %b %Y", "%d %B %Y", "%B %d, %Y", "%b %d, %Y", "%d/%m/%Y"):
             try:
                 return datetime.strptime(text.strip(), fmt).date().isoformat()
             except ValueError:
                 continue
         return None
 
-    def _resolve_date_for_message(
-        self,
-        text: str,
-        timestamp: str,
-        date_map: dict[str, str],
-    ) -> str:
-        """
-        Best-effort: return YYYY-MM-DD for a message.
-        We can't reliably tie every message to a divider without DOM
-        position info, so we use today's date as default and let
-        the pipeline pass the WhatsApp-scrolled date from dividers
-        when it can be inferred.
-        """
-        # If text contains a recognizable date divider, use it
-        lower = text.lower()
-        for key, iso_date in date_map.items():
-            if key in lower:
-                return iso_date
-        # Default: today
-        return date_map.get("today", date.today().isoformat())
-
-    # ── Parsing helpers ───────────────────────────────────────────────────────
-
     def _extract_sender_and_text(self, text: str) -> tuple[str | None, str | None]:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
         if not lines:
             return None, None
         sender = None
-        body = []
+        body   = []
         for line in lines:
-            if not sender and re.match(r"^[A-Za-z0-9 _.+()-]+$", line) and len(line) <= 40:
+            if not sender and re.match(r"^[A-Za-z0-9 _.+()\-]+$", line) and len(line) <= 40:
                 sender = line
                 continue
             body.append(line)
-        final_text = " ".join(body).strip()
-        if not final_text:
+        final = " ".join(body).strip()
+        if not final:
             return None, None
-        return sender or "unknown", final_text
+        return sender or "unknown", final
 
     def _extract_timestamp(self, text: str) -> str:
-        match = re.search(r"\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\b", text)
-        if not match:
-            return datetime.now().strftime("%H:%M")
-        return match.group(0).strip()
+        m = re.search(r"\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\b", text)
+        return m.group(0).strip() if m else datetime.now().strftime("%H:%M")
