@@ -185,15 +185,17 @@ class GoogleSheetsWriter:
     def write_tasks(self, rows: list[dict]) -> str:
         """
         Write tasks to Google Sheet and return the sheet URL.
-        rows: same format as ExcelWriter.write_tasks()
-        Returns: URL of the spreadsheet
+        Strategy (same as ExcelWriter):
+        - Read existing data from sheet
+        - Old dates NOT in incoming rows → preserved as-is
+        - New/current dates → overwrite
         """
         if not rows:
             logger.info("No task rows to write to Google Sheets.")
-            return ""
+            return f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
 
-        # ── 1. Build data structure ───────────────────────────────────────────
-        data: dict[str, dict[str, dict]] = defaultdict(
+        # ── 1. Build incoming data dict ───────────────────────────────────────
+        incoming: dict[str, dict[str, dict]] = defaultdict(
             lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
         )
         for r in rows:
@@ -204,14 +206,11 @@ class GoogleSheetsWriter:
             for line in task.splitlines():
                 line = line.strip().lstrip("•").strip()
                 if line:
-                    data[day][assignee]["tasks"].append(line)
+                    incoming[day][assignee]["tasks"].append(line)
             if status:
-                data[day][assignee]["statuses"].append(status)
+                incoming[day][assignee]["statuses"].append(status)
 
-        sorted_dates  = sorted(data.keys())
-        all_employees = sorted({emp for day in data.values() for emp in day})
-        n_emp         = len(all_employees)
-        total_cols    = 1 + n_emp * 2
+        incoming_dates = set(incoming.keys())
 
         # ── 2. Get or create the worksheet ───────────────────────────────────
         gc = self._get_client()
@@ -220,40 +219,69 @@ class GoogleSheetsWriter:
         except Exception as e:
             raise RuntimeError(f"Cannot open spreadsheet '{self.spreadsheet_id}': {e}") from e
 
+        ws_exists = True
         try:
             ws = sh.worksheet(self.sheet_name)
-            ws.clear()
         except Exception:
-            ws = sh.add_worksheet(title=self.sheet_name, rows=500, cols=total_cols + 5)
+            ws = sh.add_worksheet(title=self.sheet_name, rows=500, cols=50)
+            ws_exists = False
 
         sheet_id = ws.id
 
-        # ── 3. Build values grid ──────────────────────────────────────────────
+        # ── 3. Read existing data from sheet (preserve old dates) ─────────────
+        existing: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
+        if ws_exists:
+            try:
+                existing = self._read_existing_sheet_data(ws, incoming_dates)
+                logger.info("Google Sheets: preserved %d old date rows", len(existing))
+            except Exception as e:
+                logger.warning("Could not read existing sheet data: %s — starting fresh", e)
+
+        # ── 4. Merge: existing (old dates) + incoming (new dates) ─────────────
+        data: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
+        for day, employees in existing.items():
+            for emp, d in employees.items():
+                data[day][emp]["tasks"]    = list(d["tasks"])
+                data[day][emp]["statuses"] = list(d["statuses"])
+        for day, employees in incoming.items():
+            for emp, d in employees.items():
+                data[day][emp]["tasks"]    = list(d["tasks"])
+                data[day][emp]["statuses"] = list(d["statuses"])
+
+        sorted_dates  = sorted(data.keys())
+        all_employees = sorted({emp for day in data.values() for emp in day})
+        n_emp         = len(all_employees)
+        total_cols    = 1 + n_emp * 2
+
+        # ── 5. Clear and rebuild the sheet ────────────────────────────────────
+        ws.clear()
+
+        # ── 6. Build values grid ──────────────────────────────────────────────
         all_values: list[list[str]] = []
 
-        # Row 0 (idx): title row
         title_row = ["TenBit Daily Task Report"] + [""] * (total_cols - 1)
         all_values.append(title_row)
 
-        # Row 1: employee headers
         emp_row = ["Date"]
         for emp in all_employees:
             emp_row.append(emp)
-            emp_row.append("")   # placeholder for merged col
+            emp_row.append("")
         all_values.append(emp_row)
 
-        # Row 2: sub-headers
         sub_row = [""]
         for _ in all_employees:
             sub_row.append("Tasks")
             sub_row.append("Status")
         all_values.append(sub_row)
 
-        # Rows 3+: data
         for day in sorted_dates:
             row_vals = [_day_label(day)]
             for emp in all_employees:
-                emp_data = data[day].get(emp, {"tasks": [], "statuses": []})
+                emp_data   = data[day].get(emp, {"tasks": [], "statuses": []})
                 tasks_list = emp_data["tasks"]
                 statuses   = emp_data["statuses"]
                 cell_text  = "\n".join(f"• {t}" for t in tasks_list) if tasks_list else ""
@@ -266,8 +294,10 @@ class GoogleSheetsWriter:
                 row_vals.append(s_label)
             all_values.append(row_vals)
 
-        # ── 4. Write values to sheet ──────────────────────────────────────────
+        # ── 7. Write all values ────────────────────────────────────────────────
         ws.update(range_name="A1", values=all_values)
+        logger.info("Google Sheets: wrote %d rows x %d cols (%d dates total)",
+                    len(all_values), total_cols, len(sorted_dates))
         logger.info("Google Sheets: wrote %d rows x %d cols", len(all_values), total_cols)
 
         # ── 5. Apply formatting via batchUpdate ───────────────────────────────
@@ -300,6 +330,76 @@ class GoogleSheetsWriter:
         url = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
         logger.info("Google Sheets updated: %s", url)
         return url
+
+    # ── Read existing sheet data back into dict ───────────────────────────────
+    def _read_existing_sheet_data(
+        self,
+        ws,
+        skip_dates: set[str],
+    ) -> dict[str, dict[str, dict]]:
+        """
+        Read existing Google Sheet values back into data dict.
+        Skips dates in skip_dates (those come from incoming rows).
+        Row layout: Row1=title, Row2=employee names, Row3=sub-headers, Row4+=data
+        """
+        data: dict[str, dict[str, dict]] = defaultdict(
+            lambda: defaultdict(lambda: {"tasks": [], "statuses": []})
+        )
+
+        all_values = ws.get_all_values()
+        if len(all_values) < 4:
+            return data   # nothing useful yet
+
+        # Row index 1 (0-based) = employee headers
+        # Columns: A=Date, B=Emp1Tasks, C=Emp1Status, D=Emp2Tasks, ...
+        emp_row   = all_values[1]   # row 2 (0-indexed row 1)
+        employees: list[str] = []
+        col = 1   # 0-based, skip col 0 (Date)
+        while col < len(emp_row):
+            cell_val = (emp_row[col] or "").strip()
+            if cell_val:
+                employees.append(cell_val)
+            col += 2   # each employee takes 2 columns
+
+        if not employees:
+            return data
+
+        # Rows 3+ (0-based index 3+) = data rows
+        for row in all_values[3:]:
+            if not row or not (row[0] or "").strip():
+                continue
+            date_label = row[0].strip()
+            # Convert "08 Sep 2026" → "2026-09-08"
+            try:
+                from datetime import datetime as _dt
+                iso = _dt.strptime(date_label, "%d %b %Y").date().isoformat()
+            except Exception:
+                iso = date_label
+
+            if iso in skip_dates:
+                continue   # this date will be replaced by incoming data
+
+            for i, emp in enumerate(employees):
+                tasks_col  = 1 + i * 2   # 0-based
+                status_col = tasks_col + 1
+
+                tasks_cell  = row[tasks_col]  if tasks_col  < len(row) else ""
+                status_cell = row[status_col] if status_col < len(row) else ""
+
+                # Parse bullet points
+                for line in str(tasks_cell).splitlines():
+                    line = line.strip().lstrip("•").strip()
+                    if line:
+                        data[iso][emp]["tasks"].append(line)
+
+                # Reverse-map status label → key
+                if data[iso][emp]["tasks"]:
+                    status_reverse = {v: k for k, v in _STATUS_LABEL.items()}
+                    raw = str(status_cell).strip()
+                    status_key = status_reverse.get(raw, "open")
+                    data[iso][emp]["statuses"].append(status_key)
+
+        return data
 
     # ── Formatting helpers ────────────────────────────────────────────────────
     def _build_format_requests(
