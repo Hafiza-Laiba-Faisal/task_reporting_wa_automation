@@ -45,21 +45,35 @@ class TaskProcessor:
 
     def _fix_known_aliases(self) -> None:
         """
-        Post-extraction correction:
-        - AT → Ayan (WhatsApp alias used by Ayan)
-        - unknown with no source_sender → keep as-is (cannot infer)
-        Runs after every extract_tasks() call to keep DB clean.
+        Post-extraction corrections applied after every extract_tasks():
+        1. AT → Ayan (WhatsApp alias)
+        2. 'unknown' assignee → replaced with source_sender if available
+           (happens when LLM fails to infer assignee from consecutive messages)
         """
         from app.database.repository import get_connection
         conn = get_connection()
-        # AT is always Ayan per SENDER_NAME_MAP
-        updated = conn.execute(
+
+        # Fix AT → Ayan
+        r1 = conn.execute(
             "UPDATE tasks SET assignee='Ayan', source_sender='Ayan' WHERE assignee='AT'"
         ).rowcount
+
+        # Fix unknown → use source_sender (which is always correct from message_collector)
+        r2 = conn.execute(
+            """UPDATE tasks
+               SET assignee = source_sender
+               WHERE assignee = 'unknown'
+                 AND source_sender IS NOT NULL
+                 AND source_sender != ''
+                 AND source_sender != 'unknown'"""
+        ).rowcount
+
         conn.commit()
         conn.close()
-        if updated:
-            logger.info("Alias fix: AT → Ayan (%d tasks)", updated)
+        if r1:
+            logger.info("Alias fix: AT → Ayan (%d tasks)", r1)
+        if r2:
+            logger.info("Alias fix: unknown → source_sender (%d tasks)", r2)
 
     def extract_tasks(self) -> list[dict]:
         """
