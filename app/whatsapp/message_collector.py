@@ -116,22 +116,25 @@ class MessageCollector:
 
     def _scroll_until_date_visible(self, target_date: date) -> None:
         """
-        Keep scrolling up in the chat panel until:
-          - A date divider for target_date (or earlier) is visible, OR
-          - We have scrolled MAX_SCROLL_ATTEMPTS times with no new content
+        Keep scrolling up until target date divider visible or top of chat reached.
+        Each scroll waits for new messages to actually render before checking.
         """
         MAX_ATTEMPTS  = 40
-        PAUSE_MS      = 1200  # wait after each scroll for WhatsApp to lazy-load
+        PAUSE_MS      = 1500   # after each scroll, wait for WhatsApp to render new messages
         panel         = self.page.locator(_PANEL_SEL)
 
-        logger.info("Waiting 5s for chat to fully load before scrolling...")
-        self.page.wait_for_timeout(5000)
+        # Initial settle — let WhatsApp fully render current messages
+        logger.info("Waiting 4s for chat messages to fully render...")
+        self.page.wait_for_timeout(4000)
+
+        # Log what's visible before we start
+        initial_msgs = self.page.locator("div[data-testid='msg-container']").count()
+        logger.info("Messages visible before scrolling: %d", initial_msgs)
+        logger.info("Scrolling to load history (target: %s, max %d scrolls)...",
+                    target_date.isoformat(), MAX_ATTEMPTS)
 
         prev_height   = -1
         no_change_cnt = 0
-
-        logger.info("Scrolling to load history (target: %s, max %d scrolls)...",
-                    target_date.isoformat(), MAX_ATTEMPTS)
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             # Check if target date divider is already on screen
@@ -139,39 +142,44 @@ class MessageCollector:
                 logger.info("Target date divider found after %d scrolls.", attempt)
                 return
 
-            # Scroll to top of panel
+            # Scroll to absolute top of panel
             try:
-                panel.evaluate("el => el.scrollTop = 0")
+                panel.evaluate("el => { el.scrollTop = 0; }")
             except Exception:
                 pass
 
+            # Wait for WhatsApp to lazy-load older messages
             self.page.wait_for_timeout(PAUSE_MS)
 
-            # Detect if page actually loaded new content
+            # Check if scroll height grew (new messages loaded)
             try:
                 cur_height = panel.evaluate("el => el.scrollHeight")
+                cur_msgs   = self.page.locator("div[data-testid='msg-container']").count()
             except Exception:
                 cur_height = prev_height
+                cur_msgs   = 0
 
             if cur_height == prev_height:
                 no_change_cnt += 1
-                if no_change_cnt >= 5:
+                if no_change_cnt >= 4:
                     logger.info(
-                        "No new content after %d consecutive scrolls — reached top of chat.",
-                        no_change_cnt
+                        "scrollHeight unchanged for %d scrolls (height=%d) — reached top of chat.",
+                        no_change_cnt, cur_height
                     )
                     return
             else:
                 no_change_cnt = 0
+                logger.debug("Scroll %d: height %d→%d | msgs: %d",
+                             attempt, prev_height, cur_height, cur_msgs)
 
             prev_height = cur_height
 
             if attempt % 5 == 0:
                 dividers = self._visible_dividers()
-                logger.info("Scroll %d/%d | height=%d | dividers: %s",
-                            attempt, MAX_ATTEMPTS, cur_height, dividers)
+                logger.info("Scroll %d/%d | height=%d | msgs=%d | dividers=%s",
+                            attempt, MAX_ATTEMPTS, cur_height, cur_msgs, dividers)
 
-        logger.warning("Reached max scroll attempts (%d). Loading what's visible.", MAX_ATTEMPTS)
+        logger.warning("Max scroll attempts (%d) reached. Collecting what's visible.", MAX_ATTEMPTS)
 
     def _date_divider_visible(self, target_date: date) -> bool:
         """Return True if any divider on screen matches target_date or earlier."""

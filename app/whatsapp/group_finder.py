@@ -158,26 +158,48 @@ class GroupFinder:
         logger.info("Header text after open: %s", header_text)
         return expected_name.lower() in header_text.lower()
 
-    def wait_for_chat_to_load(self, timeout_seconds: int = 15) -> None:
-        """Wait until the chat message pane is visible after opening a group."""
-        # The main message list has data-testid='conversation-panel-messages'
-        # or a div[role='application'] inside the conversation area.
-        selectors = [
-            "div[data-testid='conversation-panel-messages']",
-            "div[role='application']",
-            "div[data-testid='msg-container']",
-        ]
+    def wait_for_chat_to_load(self, timeout_seconds: int = 20) -> None:
+        """
+        Wait until:
+        1. The conversation panel is visible
+        2. At least one message container (msg-container) is in the DOM
+        3. An extra settle wait so lazy-load finishes rendering
+        """
+        panel_sel = "div[data-testid='conversation-panel-messages']"
+        msg_sel   = "div[data-testid='msg-container']"
+
         deadline = time.monotonic() + timeout_seconds
+        # Step 1: wait for panel
         while time.monotonic() < deadline:
-            for sel in selectors:
-                try:
-                    if self.page.locator(sel).count():
-                        logger.info("Chat messages pane loaded (selector: %s).", sel)
-                        return
-                except Exception:
-                    pass
+            try:
+                if self.page.locator(panel_sel).count():
+                    logger.info("Chat messages pane loaded (selector: %s).", panel_sel)
+                    break
+            except Exception:
+                pass
             time.sleep(0.5)
-        logger.warning("Chat messages pane did not confirm load within %s seconds; continuing anyway.", timeout_seconds)
+        else:
+            logger.warning("Chat panel did not appear within %ss; continuing anyway.", timeout_seconds)
+            return
+
+        # Step 2: wait for at least 1 message to appear
+        msg_deadline = time.monotonic() + 10
+        while time.monotonic() < msg_deadline:
+            try:
+                count = self.page.locator(msg_sel).count()
+                if count >= 1:
+                    logger.info("Messages visible in DOM: %d — chat ready.", count)
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        else:
+            logger.warning("No msg-container found after waiting; continuing anyway.")
+            return
+
+        # Step 3: extra settle time so WhatsApp finishes rendering all visible messages
+        logger.info("Waiting 3s for WhatsApp to finish rendering messages...")
+        time.sleep(3)
 
     def run(self) -> str:
         if not self.cfg.whatsapp_group_name:
