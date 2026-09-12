@@ -10,85 +10,124 @@
     <div class="container">
       <div class="header">
         <div>
-          <h1>WhatsApp Task Automation</h1>
-          <p class="subtitle">Collect, extract & track tasks from WhatsApp groups</p>
+          <h1>📱 WhatsApp Task Automation</h1>
+          <p class="subtitle">Collect, extract & track tasks from WhatsApp groups automatically</p>
         </div>
         <div class="header-status">
           <div class="status-item">
-            <span class="label">Status</span>
+            <span class="label">System Status</span>
             <span class="badge badge-green" id="statusBadge">Ready</span>
           </div>
         </div>
       </div>
 
-      <!-- Dashboard -->
+      <!-- Dashboard Stats -->
       <div class="dashboard">
         <div class="stat-card">
-          <div class="stat-label">Total Tasks</div>
+          <div class="stat-label">📊 Total Tasks</div>
           <div class="stat-value" id="statTasks">0</div>
+          <div class="stat-detail" id="statTasksDetail">No tasks collected yet</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Total Messages</div>
+          <div class="stat-label">💬 Total Messages</div>
           <div class="stat-value" id="statMessages">0</div>
+          <div class="stat-detail" id="statMessagesDetail">No messages collected yet</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Active Group</div>
-          <div class="stat-value" id="statGroup">—</div>
+          <div class="stat-label">👥 Active Group</div>
+          <div class="stat-value" id="statGroup">Not Set</div>
+          <div class="stat-detail" id="statGroupDetail">Configure in settings below</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Last Run</div>
+          <div class="stat-label">⏱️ Last Run</div>
           <div class="stat-value" id="statLastRun">Never</div>
+          <div class="stat-detail" id="statLastRunDetail">Press Run to collect tasks</div>
         </div>
       </div>
 
       <!-- Quick Actions -->
       <div class="card actions-section">
-        <button id="runBtn" class="btn-primary btn-large">▶ Run Task Extraction</button>
-        <button id="reprocessBtn" class="btn-secondary">↻ Reprocess from DB</button>
-        <button id="downloadExcelBtn" class="btn-secondary">⬇ Download Excel</button>
+        <button id="runBtn" class="btn-primary btn-large" title="Open WhatsApp browser and collect messages">
+          ▶️ Run Task Extraction
+        </button>
+        <button id="reprocessBtn" class="btn-secondary" title="Re-extract tasks from existing messages in DB">
+          🔄 Reprocess from DB
+        </button>
+        <button id="downloadExcelBtn" class="btn-secondary" title="Download tasks as Excel file">
+          ⬇️ Download Excel
+        </button>
+        <button id="refreshAllBtn" class="btn-secondary btn-small" title="Refresh all data from server">
+          🔃 Refresh All
+        </button>
       </div>
 
-      <!-- Status Output -->
-      <div class="card output" id="statusBox">Ready.</div>
+      <!-- Status/Output Box -->
+      <div class="card">
+        <div class="status-header">
+          <h3>📝 Operation Status</h3>
+          <button id="clearStatusBtn" class="btn-tiny">Clear</button>
+        </div>
+        <div class="output" id="statusBox">System ready. Configure settings and click "Run Task Extraction" to start.</div>
+      </div>
 
       <!-- Configuration Section -->
       <div class="card">
-        <h2 class="section-title">Configuration</h2>
+        <h2 class="section-title">⚙️ Configuration</h2>
         <form id="configForm">
           <div class="form-row">
             <div class="form-group">
-              <label>Target WhatsApp Group</label>
-              <input id="groupName" name="whatsapp_group_name" placeholder="e.g., Tenbit Operations" required />
+              <label>Target WhatsApp Group *</label>
+              <input 
+                id="groupName" 
+                name="whatsapp_group_name" 
+                placeholder="e.g., Tenbit Operations" 
+                required 
+                title="Name of the WhatsApp group to monitor"
+              />
+              <small>Name must match exactly as shown in WhatsApp</small>
             </div>
             <div class="form-group">
-              <label>LLM Model</label>
-              <select id="modelName" name="llm_model">
-                <option value="mistral-small-latest">Mistral Small (Fast)</option>
-                <option value="mistral-large-latest">Mistral Large (Accurate)</option>
+              <label>LLM Provider</label>
+              <select id="modelName" name="llm_model" title="Choose the AI model for task extraction">
+                <option value="mistral-small-latest">Mistral Small (Fast & Free)</option>
+                <option value="mistral-large-latest">Mistral Large (More Accurate)</option>
                 <option value="gpt-4-turbo">OpenRouter: GPT-4 Turbo</option>
+                <option value="ollama-local">Ollama: Local Model</option>
               </select>
+              <small>Select model based on accuracy/speed needs</small>
             </div>
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>LLM API Key (optional, uses .env if empty)</label>
-              <input id="mistralKey" name="llm_api_key" type="password" placeholder="Leave blank to use .env" />
+              <label>LLM API Key (Optional)</label>
+              <input 
+                id="mistralKey" 
+                name="llm_api_key" 
+                type="password" 
+                placeholder="Leave blank to use .env" 
+                title="Leave blank to use API key from .env file"
+              />
+              <small>Will use environment variable if empty</small>
             </div>
             <div class="form-group">
-              <label>Dry Run Mode</label>
-              <select id="dryRun" name="dry_run">
-                <option value="false">Production</option>
-                <option value="true">Test Only</option>
+              <label>Execution Mode</label>
+              <select id="dryRun" name="dry_run" title="Test mode: log actions without modifying DB">
+                <option value="false">✅ Production (Save to DB)</option>
+                <option value="true">🧪 Test Mode (Dry Run)</option>
               </select>
+              <small>Use Test mode to verify without saving</small>
             </div>
           </div>
-          <button type="submit" class="btn-primary">💾 Save Configuration</button>
+          <div class="form-actions">
+            <button type="submit" class="btn-primary">💾 Save Configuration</button>
+            <button type="button" id="testConfigBtn" class="btn-secondary">🧪 Test Connection</button>
+          </div>
         </form>
       </div>
 
-      <!-- DB Viewer Tabs -->
+      <!-- Database Viewer -->
       <div class="card">
-        <h2 class="section-title">Database Viewer</h2>
+        <h2 class="section-title">🗄️ Database Viewer</h2>
         <div class="tab-bar">
           <button class="tab-btn active" data-tab="tasks">📋 Tasks</button>
           <button class="tab-btn" data-tab="messages">💬 Messages</button>
@@ -97,25 +136,39 @@
         <!-- Tasks table -->
         <div id="tab-tasks" class="tab-content">
           <div class="table-toolbar">
+            <input 
+              type="text" 
+              id="taskSearch" 
+              placeholder="Search tasks..." 
+              class="search-input"
+              title="Filter tasks by assignee or task name"
+            />
             <button id="refreshTasksBtn" class="btn-small">🔄 Refresh</button>
             <span id="tasksCount" class="count-badge">0 tasks</span>
+            <select id="taskFilter" class="filter-select">
+              <option value="">All Status</option>
+              <option value="completed">✅ Completed</option>
+              <option value="in_progress">🔄 In Progress</option>
+              <option value="open">📝 Open</option>
+              <option value="blocked">🚫 Blocked</option>
+            </select>
           </div>
           <div class="table-wrap">
             <table id="tasksTable">
               <thead>
                 <tr>
                   <th>Assignee</th>
-                  <th>Task</th>
+                  <th>Task Description</th>
                   <th>Status</th>
                   <th>Priority</th>
                   <th>Deadline</th>
                   <th>Source</th>
-                  <th>Time</th>
+                  <th>Timestamp</th>
                   <th>Confidence</th>
                 </tr>
               </thead>
               <tbody id="tasksBody">
-                <tr><td colspan="8" style="text-align:center;color:#888">Loading...</td></tr>
+                <tr><td colspan="8" style="text-align:center;color:#888;padding:20px">No tasks yet. Run extraction to populate.</td></tr>
               </tbody>
             </table>
           </div>
@@ -124,30 +177,57 @@
         <!-- Messages table -->
         <div id="tab-messages" class="tab-content" style="display:none">
           <div class="table-toolbar">
+            <input 
+              type="text" 
+              id="msgSearch" 
+              placeholder="Search messages..." 
+              class="search-input"
+              title="Filter messages by sender or content"
+            />
             <button id="refreshMsgsBtn" class="btn-small">🔄 Refresh</button>
             <span id="msgsCount" class="count-badge">0 messages</span>
+            <select id="msgFilter" class="filter-select">
+              <option value="">All Senders</option>
+            </select>
           </div>
           <div class="table-wrap">
             <table id="msgsTable">
               <thead>
                 <tr>
                   <th>Sender</th>
-                  <th>Message</th>
-                  <th>Time</th>
-                  <th>Collected</th>
+                  <th>Message Content</th>
+                  <th>Timestamp</th>
+                  <th>Collected At</th>
                 </tr>
               </thead>
               <tbody id="msgsBody">
-                <tr><td colspan="4" style="text-align:center;color:#888">Loading...</td></tr>
+                <tr><td colspan="4" style="text-align:center;color:#888;padding:20px">No messages yet. Run extraction to populate.</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      <!-- Footer -->
+      <!-- System Info Footer -->
       <div class="footer">
-        <p>WhatsApp Task Automation System v1.0 | Last updated: <span id="footerTime">—</span></p>
+        <div class="footer-content">
+          <div class="footer-info">
+            <p>WhatsApp Task Automation System v1.0</p>
+            <small>Backend: FastAPI | Database: SQLite | LLM: Mistral/OpenRouter</small>
+          </div>
+          <div class="footer-timestamp">
+            <p>Last Update: <span id="footerTime">—</span></p>
+            <small>Server Time: <span id="serverTime">—</span></small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading Spinner Modal -->
+    <div class="modal" id="loadingModal" style="display:none">
+      <div class="modal-content">
+        <div class="spinner"></div>
+        <p id="loadingText">Processing...</p>
       </div>
     </div>
 

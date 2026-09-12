@@ -230,12 +230,24 @@ class MessageCollector:
         return False
 
     def _build_date_map(self) -> dict[str, str]:
-        """Build {text_lower: YYYY-MM-DD} from dividers + full page scan."""
-        today = date.today()
+        """Build {text_lower: YYYY-MM-DD} from dividers + full page scan.
+
+        WhatsApp date divider sequence (newest → oldest):
+          Today → Yesterday → Monday/Tuesday/... → 8 Sep 2026 → ...
+        """
+        today     = date.today()
+        yesterday = today - timedelta(days=1)
+
         mapping: dict[str, str] = {
             "today":     today.isoformat(),
-            "yesterday": (today - timedelta(days=1)).isoformat(),
+            "yesterday": yesterday.isoformat(),
         }
+
+        # Days-of-week → resolve to actual date (last 7 days)
+        day_names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+        for delta in range(2, 9):
+            d = today - timedelta(days=delta)
+            mapping[d.strftime("%A").lower()] = d.isoformat()  # e.g. "monday" → "2026-09-07"
 
         # WhatsApp divider elements
         try:
@@ -250,7 +262,7 @@ class MessageCollector:
         except Exception:
             pass
 
-        # Full page scan fallback
+        # Full page body scan for any "11 Sep 2026" style dates
         for iso in self._dates_in_page():
             try:
                 d = date.fromisoformat(iso)
@@ -264,9 +276,12 @@ class MessageCollector:
         return mapping
 
     def _check_if_divider(self, text: str, date_map: dict[str, str]) -> str | None:
+        """If row text matches a date divider (today/yesterday/Mon/dd Mon YYYY), return YYYY-MM-DD."""
         lower = text.strip().lower()
+        # Exact match (today, yesterday, monday, tuesday, "8 sep 2026", etc.)
         if lower in date_map:
             return date_map[lower]
+        # Try parsing as date string directly
         parsed = self._parse_date_string(text.strip())
         if parsed:
             return parsed

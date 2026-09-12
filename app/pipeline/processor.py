@@ -108,11 +108,10 @@ class TaskProcessor:
         conn = get_connection()
         conn.row_factory = __import__("sqlite3").Row
         all_tasks = [dict(r) for r in conn.execute(
-            "SELECT task, assignee, status, priority, deadline, created_at FROM tasks ORDER BY created_at"
+            "SELECT task, assignee, status, priority, deadline, date, created_at FROM tasks ORDER BY date, assignee"
         ).fetchall()]
         conn.close()
 
-        # Prefer 'date' field; fall back to created_at
         rows = []
         for t in all_tasks:
             rows.append({
@@ -121,7 +120,7 @@ class TaskProcessor:
                 "status":   t.get("status", "open"),
                 "priority": t.get("priority", "medium"),
                 "deadline": t.get("deadline", ""),
-                "date":     t.get("date") or t.get("created_at", ""),
+                "date":     t.get("date") or t.get("created_at", "")[:10],
             })
 
         writer = ExcelWriter(self.cfg.excel_output_path)
