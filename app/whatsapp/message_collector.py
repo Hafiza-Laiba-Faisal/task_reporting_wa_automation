@@ -50,6 +50,7 @@ class MessageCollector:
         collected: list[dict[str, Any]] = []
         skipped_dup  = 0
         current_date = date_map.get("today", date.today().isoformat())
+        last_sender  = "unknown"   # WhatsApp omits sender name on consecutive messages
 
         for i in range(total):
             row  = all_rows.nth(i)
@@ -64,8 +65,14 @@ class MessageCollector:
                 continue
 
             sender, message_text = self._extract_sender_and_text(text)
-            if not sender or not message_text:
+            if not message_text:
                 continue
+
+            # If WhatsApp omitted the sender (consecutive messages), reuse last known
+            if not sender or sender == "unknown":
+                sender = last_sender
+            else:
+                last_sender = sender
 
             sender    = self.cfg.resolve_sender_name(sender)
             timestamp = self._extract_timestamp(text)
