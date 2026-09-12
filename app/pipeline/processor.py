@@ -98,15 +98,25 @@ class TaskProcessor:
         logger.info("Extracted %d tasks from %d messages.", len(tasks), len(valid_messages))
         return tasks
 
-    def _get_all_task_rows(self) -> list[dict]:
-        """Read all tasks from DB and return as flat list of row dicts."""
+    def _get_recent_task_rows(self, days: int = 2) -> list[dict]:
+        """
+        Read tasks from DB for the last `days` days only.
+        Excel/Sheets always shows: today + yesterday (max).
+        DB data is preserved forever — only the export is limited.
+        """
         from app.database.repository import get_connection
+        from datetime import timedelta
+
+        cutoff = (date.today() - timedelta(days=days - 1)).isoformat()  # e.g. yesterday
         conn = get_connection()
         conn.row_factory = __import__("sqlite3").Row
         all_tasks = [dict(r) for r in conn.execute(
-            "SELECT task, assignee, status, priority, deadline, date, created_at FROM tasks ORDER BY date, assignee"
+            "SELECT task, assignee, status, priority, deadline, date, created_at "
+            "FROM tasks WHERE date >= ? ORDER BY date, assignee",
+            (cutoff,)
         ).fetchall()]
         conn.close()
+        logger.info("Export: %d tasks from last %d days (cutoff: %s)", len(all_tasks), days, cutoff)
         return [
             {
                 "task":     t.get("task", ""),
@@ -123,13 +133,13 @@ class TaskProcessor:
         if self.dry_run:
             logger.info("Dry run enabled; no Excel update performed.")
             return
-        rows = self._get_all_task_rows()
+        rows = self._get_recent_task_rows(days=2)
         writer = ExcelWriter(self.cfg.excel_output_path)
         writer.write_tasks(rows)
-        logger.info("Excel updated with %d total tasks.", len(rows))
+        logger.info("Excel updated with %d tasks (last 2 days).", len(rows))
 
     def write_google_sheets(self, tasks: list[dict]) -> str:
-        """Sync all tasks to Google Sheets. Returns sheet URL or empty string."""
+        """Sync last 2 days of tasks to Google Sheets. Returns sheet URL or empty string."""
         if self.dry_run:
             logger.info("Dry run enabled; skipping Google Sheets sync.")
             return ""
@@ -144,7 +154,7 @@ class TaskProcessor:
 
         try:
             from app.google_sheets.writer import GoogleSheetsWriter
-            rows   = self._get_all_task_rows()
+            rows   = self._get_recent_task_rows(days=2)
             writer = GoogleSheetsWriter(
                 spreadsheet_id=self.cfg.google_sheets_id,
                 credentials_path=self.cfg.google_sheets_credentials,
